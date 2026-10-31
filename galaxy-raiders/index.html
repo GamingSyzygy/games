@@ -1,0 +1,1168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Galaxy Raiders</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { display: block; background: #000; image-rendering: pixelated; image-rendering: crisp-edges; }
+</style>
+</head>
+<body>
+<canvas id="game" width="480" height="640"></canvas>
+<script>
+'use strict';
+
+// ---------- Setup ----------
+const W = 480, H = 640;
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+function fitCanvas() {
+  const s = Math.min(window.innerWidth / W, window.innerHeight / H);
+  canvas.style.width = Math.floor(W * s) + 'px';
+  canvas.style.height = Math.floor(H * s) + 'px';
+}
+window.addEventListener('resize', fitCanvas);
+fitCanvas();
+
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const randInt = n => Math.floor(Math.random() * n);
+// Centre-based box overlap test
+const overlap = (ax, ay, aw, ah, bx, by, bw, bh) =>
+  Math.abs(ax - bx) * 2 < aw + bw && Math.abs(ay - by) * 2 < ah + bh;
+// Ease angle r toward target by fraction k, taking the shortest way round
+function easeAngle(r, target, k) {
+  const TAU = Math.PI * 2;
+  const d = ((target - r + Math.PI) % TAU + TAU) % TAU - Math.PI;
+  return r + d * k;
+}
+
+// ---------- Sprites (drawn from text maps) ----------
+const PX = 2; // screen pixels per sprite pixel
+
+const PLAYER_MAP = [
+  '......r......',
+  '......#......',
+  '.....###.....',
+  '.....#b#.....',
+  '..r..###..r..',
+  '..#.#####.#..',
+  '.###########.',
+  '##r#######r##',
+  '##..##.##..##',
+  '#....#.#....#',
+];
+const BUG_A = [
+  '..#.....#..',
+  '...#...#...',
+  '..#######..',
+  '.##.###.##.',
+  '###########',
+  '#.#######.#',
+  '#.#.....#.#',
+  '...##.##...',
+];
+const BUG_B = [
+  '..#.....#..',
+  '#..#...#..#',
+  '#.#######.#',
+  '###.###.###',
+  '###########',
+  '.#########.',
+  '..#.....#..',
+  '.#.......#.',
+];
+const FLAG_A = [
+  '.....#.....',
+  '....###....',
+  '..#.###.#..',
+  '.#########.',
+  '###rr#rr###',
+  '#.#######.#',
+  '..#.#.#.#..',
+  '.#.......#.',
+];
+const FLAG_B = [
+  '.....#.....',
+  '....###....',
+  '#.#.###.#.#',
+  '###########',
+  '.##rr#rr##.',
+  '..#######..',
+  '..#.#.#.#..',
+  '...#...#...',
+];
+
+// Sprites are stored as runs of same-coloured pixels and painted straight onto the
+// main canvas (no off-screen canvases, which some browser extensions interfere with)
+function makeSprite(rows, palette) {
+  const w = Math.max(...rows.map(r => r.length)), h = rows.length, rects = [];
+  rows.forEach((row, y) => {
+    let x = 0;
+    while (x < row.length) {
+      const ch = row[x];
+      if (!palette[ch]) { x++; continue; }
+      let end = x;
+      while (end < row.length && row[end] === ch) end++;
+      rects.push([x * PX, y * PX, (end - x) * PX, PX, palette[ch]]);
+      x = end;
+    }
+  });
+  return { width: w * PX, height: h * PX, rects };
+}
+
+// Paint a sprite with its top-left at (x, y), optionally scaled to sw x sh
+function paintSprite(s, x, y, sw = s.width, sh = s.height) {
+  const kx = sw / s.width, ky = sh / s.height;
+  for (const [rx, ry, rw, rh, c] of s.rects) {
+    ctx.fillStyle = c;
+    ctx.fillRect(x + rx * kx, y + ry * ky, rw * kx, rh * ky);
+  }
+}
+
+const PLAYER_IMG = makeSprite(PLAYER_MAP, { '#': '#e8e8e8', r: '#ff4040', b: '#38b6ff' });
+
+// Base points: in formation / while diving (raised 25% per wave, see wavePoints)
+const TYPES = {
+  flag:   { frames: [FLAG_A, FLAG_B], pal: { '#': '#ffd23f', r: '#ff3b3b' }, pts: 60, divePts: 150 },
+  red:    { frames: [BUG_A, BUG_B],   pal: { '#': '#ff4040' }, pts: 50, divePts: 100 },
+  purple: { frames: [BUG_A, BUG_B],   pal: { '#': '#c05cff' }, pts: 40, divePts: 80 },
+  blue:   { frames: [BUG_A, BUG_B],   pal: { '#': '#38b6ff' }, pts: 30, divePts: 60 },
+};
+for (const k in TYPES) TYPES[k].img = TYPES[k].frames.map(f => makeSprite(f, TYPES[k].pal));
+
+// Power-up capsules: dropped by flagships and some divers, timed ones last POWER_TIME seconds
+const POWERS = {
+  double: { letter: 'D', colour: '#38e8ff', name: 'DOUBLE SHOT' },
+  rapid:  { letter: 'R', colour: '#5cff6a', name: 'RAPID FIRE' },
+  shield: { letter: 'S', colour: '#8fa8ff', name: 'SHIELD' },
+  bomb:   { letter: 'B', colour: '#ff9a2e', name: 'SMART BOMB' },
+};
+const POWER_TIME = 10;
+const DIVER_DROP_CHANCE = 1 / 12;
+
+// Laser skill: kills to half-fill the bar follow Fibonacci x LASER_SCALE (10, 20, 30, 50, 80...)
+const FIB = [1, 2, 3, 5, 8, 13, 21, 34, 55, 89];
+const LASER_SCALE = 10;
+const BEAM_W = 3; // ~10% of the ship's width
+
+// ---------- Sound (generated with Web Audio) ----------
+let actx = null, muted = false;
+function initAudio() {
+  if (!actx) {
+    try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { actx = null; }
+  } else if (actx.state === 'suspended') actx.resume();
+}
+function tone(freq, dur, type = 'square', vol = 0.06, slideTo = null, delay = 0) {
+  if (!actx || muted) return;
+  const t = actx.currentTime + delay;
+  const o = actx.createOscillator(), g = actx.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(freq, t);
+  if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+  g.gain.setValueAtTime(vol, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g).connect(actx.destination);
+  o.start(t); o.stop(t + dur);
+}
+function noise(dur, vol) {
+  if (!actx || muted) return;
+  const t = actx.currentTime, len = Math.floor(actx.sampleRate * dur);
+  const buf = actx.createBuffer(1, len, actx.sampleRate), data = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
+  const src = actx.createBufferSource(); src.buffer = buf;
+  const f = actx.createBiquadFilter(); f.type = 'lowpass';
+  f.frequency.setValueAtTime(3000, t); f.frequency.exponentialRampToValueAtTime(100, t + dur);
+  const g = actx.createGain();
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  src.connect(f).connect(g).connect(actx.destination);
+  src.start(t);
+}
+const sfxShoot  = () => tone(900, 0.12, 'square', 0.04, 300);
+const sfxBoom   = () => noise(0.25, 0.12);
+const sfxDive   = () => tone(1400, 0.5, 'triangle', 0.03, 250);
+const sfxDie    = () => { noise(0.9, 0.2); tone(220, 0.9, 'sawtooth', 0.06, 40); };
+const sfxWave   = () => [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.12, 'square', 0.04, null, i * 0.11));
+const sfxExtra  = () => [784, 1047, 1319].forEach((f, i) => tone(f, 0.1, 'square', 0.04, null, i * 0.08));
+const sfxPower  = () => [660, 880, 1320].forEach((f, i) => tone(f, 0.08, 'triangle', 0.05, null, i * 0.06));
+const sfxShield = () => tone(600, 0.3, 'square', 0.05, 150);
+const sfxLaser  = d => { tone(160, d, 'sawtooth', 0.05, 90); tone(1500, d, 'square', 0.015, 700); };
+
+// ---------- High scores (top 5, saved in this browser) ----------
+const HI_KEY = 'galaxyRaidersHi'; // old single high score, migrated on first load
+const TOP_KEY = 'galaxyRaidersTop5', INITIALS_KEY = 'galaxyRaidersInitials', TOP_SIZE = 5;
+function loadTop() {
+  try {
+    const t = JSON.parse(localStorage.getItem(TOP_KEY));
+    if (Array.isArray(t)) return t;
+    const old = parseInt(localStorage.getItem(HI_KEY), 10) || 0;
+    return old > 0 ? [{ name: '???', score: old, wave: 0 }] : [];
+  } catch (e) { return []; }
+}
+function saveTop() { try { localStorage.setItem(TOP_KEY, JSON.stringify(topScores)); } catch (e) { /* storage unavailable */ } }
+function loadInitials() { try { return (localStorage.getItem(INITIALS_KEY) || 'AAA').padEnd(3).slice(0, 3); } catch (e) { return 'AAA'; } }
+function saveInitials(n) { try { localStorage.setItem(INITIALS_KEY, n); } catch (e) { /* storage unavailable */ } }
+let topScores = loadTop();
+const qualifies = s => s > 0 && (topScores.length < TOP_SIZE || s > topScores[topScores.length - 1].score);
+
+// ---------- Game state ----------
+const game = {
+  state: 'title', // title | playing | paused | gameover
+  score: 0, hi: topScores.length ? topScores[0].score : 0, lives: 3, wave: 0, nextLife: 10000,
+  newRank: -1, entry: [], entryPos: 0,
+  t: 0, waveTimer: 0, diveTimer: 0, pending: 0, overTimer: 0, flash: 0,
+  laserTier: 0, laserKills: 0, beam: 0, waveClock: 0, flyIn: false,
+  challenge: false, challengeNo: 0, hits: 0, challengeTotal: 0, tally: false, perfectBonus: 0,
+};
+let player = null, aliens = [], pBullets = [], aBullets = [], particles = [], texts = [], capsules = [];
+let incoming = [], groups = []; // aliens still waiting to fly in, and fly-in group tallies
+let sway = 0;
+
+// Formation layout (Galaxian-style: 2 flagships, 6 red, 8 purple, 30 blue)
+const SX = 36, SY = 28, FORM_Y = 90, LOOP_R = 34;
+const LAYOUT = [
+  { type: 'flag',   cols: [3, 6] },
+  { type: 'red',    cols: [2, 3, 4, 5, 6, 7] },
+  { type: 'purple', cols: [1, 2, 3, 4, 5, 6, 7, 8] },
+  { type: 'blue',   cols: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] },
+  { type: 'blue',   cols: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] },
+  { type: 'blue',   cols: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] },
+];
+const homeX = a => W / 2 + (a.col - 4.5) * SX + sway;
+const homeY = a => FORM_Y + a.row * SY;
+
+// ---------- Fly-in paths ----------
+// Each path is a chain of cubic Bezier segments, sampled into a polyline for even-speed travel
+function bezPoint([p0, p1, p2, p3], t) {
+  const u = 1 - t, a = u * u * u, b = 3 * u * u * t, c = 3 * u * t * t, d = t * t * t;
+  return [a * p0[0] + b * p1[0] + c * p2[0] + d * p3[0], a * p0[1] + b * p1[1] + c * p2[1] + d * p3[1]];
+}
+function buildPath(segs) {
+  const pts = [];
+  segs.forEach((seg, si) => {
+    for (let i = si ? 1 : 0; i <= 24; i++) pts.push(bezPoint(seg, i / 24));
+  });
+  return pathFromPoints(pts);
+}
+function pathFromPoints(pts) {
+  const len = [0];
+  for (let i = 1; i < pts.length; i++) len.push(len[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+  return { pts, len, total: len[len.length - 1] };
+}
+function pathAt(p, s) {
+  const { pts, len } = p;
+  let i = 1;
+  while (i < len.length - 1 && len[i] < s) i++;
+  const t = clamp((s - len[i - 1]) / (len[i] - len[i - 1] || 1), 0, 1);
+  return { x: pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * t, y: pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * t };
+}
+const mirror = segs => segs.map(seg => seg.map(([x, y]) => [W - x, y]));
+// Paths stay above y=430 so streams never fly into the player's zone
+const SWOOP = [[[-20, 40], [200, 40], [320, 380], [200, 400]], [[200, 400], [80, 420], [60, 260], [160, 240]]];
+const LOOP  = [[[-20, 380], [120, 380], [260, 340], [260, 240]], [[260, 240], [260, 150], [140, 150], [140, 230]]];
+const PATHS = {
+  swoopL: buildPath(SWOOP), swoopR: buildPath(mirror(SWOOP)),
+  loopL: buildPath(LOOP), loopR: buildPath(mirror(LOOP)),
+};
+const FLY_GROUPS = [
+  { rows: [0, 1], path: 'swoopL' }, // flagships + red
+  { rows: [2],    path: 'swoopR' }, // purple
+  { rows: [3],    path: 'loopL' },
+  { rows: [4],    path: 'loopR' },
+  { rows: [5],    path: 'swoopL' },
+];
+const GROUP_GAP = 0.9, FILE_GAP = 0.12;
+const flySpeed = () => Math.min(300 + game.wave * 10, 380);
+// ---------- Challenge stage (after every 3rd wave; doesn't count as a wave) ----------
+// 5 groups of 8 fly through on set paths and leave; they never fire, dive or collide
+const CH_EVERY = 3, CH_HIT = 50, CH_PERFECT = 2000, CH_GROUP_GAP = 1.6;
+const linePts = (a, b, n = 10) => Array.from({ length: n + 1 }, (_, i) => [a[0] + (b[0] - a[0]) * i / n, a[1] + (b[1] - a[1]) * i / n]);
+const samplePts = (f, n = 60) => Array.from({ length: n + 1 }, (_, i) => f(i / n));
+const mirrorPts = pts => pts.map(([x, y]) => [W - x, y]);
+const CH_PATHS = (() => {
+  const cx = W / 2;
+  const swoop = [];
+  [[[-20, 60], [150, 60], [200, 300], [240, 320]], [[240, 320], [300, 340], [400, 250], [W + 30, 200]]]
+    .forEach((seg, si) => { for (let i = si ? 1 : 0; i <= 24; i++) swoop.push(bezPoint(seg, i / 24)); });
+  // Enter low on the left, loop the loop mid-screen, exit right
+  const loop = [...linePts([-20, 330], [cx, 330]),
+    ...samplePts(u => { const th = Math.PI / 2 - u * Math.PI * 2; return [cx + Math.cos(th) * 70, 260 + Math.sin(th) * 70]; }),
+    ...linePts([cx, 330], [W + 30, 330])];
+  // Drop in from the top, trace a figure-of-eight, climb back out
+  const eight = [...linePts([cx, -30], [cx, 250]),
+    ...samplePts(u => [cx + 150 * Math.sin(u * Math.PI * 2), 250 + 90 * Math.sin(u * Math.PI * 4)], 90),
+    ...linePts([cx, 250], [cx, -30])];
+  // Zigzag down the right-hand side and off the bottom
+  const zig = samplePts(u => [W * 0.65 + 110 * Math.sin(u * Math.PI * 3), -30 + u * (H + 60)], 90);
+  return {
+    swoopL: pathFromPoints(swoop), swoopR: pathFromPoints(mirrorPts(swoop)),
+    loopL: pathFromPoints(loop), loopR: pathFromPoints(mirrorPts(loop)),
+    eight: pathFromPoints(eight),
+    zigR: pathFromPoints(zig), zigL: pathFromPoints(mirrorPts(zig)),
+  };
+})();
+// The first four groups rotate each stage; the crossing pair (alternating sides) is always the finale
+const CH_GROUPS = [
+  { paths: ['swoopL'], type: 'blue' },
+  { paths: ['loopL'], type: 'purple' },
+  { paths: ['eight'], type: 'red' },
+  { paths: ['zigR'], type: 'purple' },
+];
+const CH_FINALE = { paths: ['swoopL', 'swoopR'], type: 'blue', flags: 2 };
+
+// Fly-in chain: the nth hit within a group adds n x CHAIN_V (wave-scaled, rounded to the nearest 5)
+const CHAIN_V = 8;
+const chainPoints = n => Math.round(CHAIN_V * n * waveMult() / 5) * 5;
+
+// Difficulty scales with wave number
+function diff() {
+  const w = game.wave;
+  return {
+    interval:  Math.max(0.5, 2.4 - w * 0.25),  // seconds between dive launches
+    maxDivers: Math.min(2 + w, 8),
+    speed:     Math.min(130 + w * 15, 260),
+    shotSpeed: Math.min(200 + w * 15, 340),
+    fireRate:  Math.min(0.8 + w * 0.25, 2.5),  // chance per second a diver fires
+    formFire:  w >= 4 ? Math.min(0.3 + 0.15 * (w - 4), 1.5) : 0, // formation shots per second
+  };
+}
+
+// Points rise 25% per wave, rounded to the nearest 10
+const waveMult = () => 1 + 0.25 * (game.wave - 1);
+const wavePoints = base => Math.round(base * waveMult() / 10) * 10;
+
+// ---------- Stars ----------
+const STAR_COLOURS = ['#ffffff', '#88ccff', '#ffcc88', '#ff88ff', '#88ff88'];
+const stars = Array.from({ length: 90 }, () => ({
+  x: Math.random() * W, y: Math.random() * H,
+  s: 20 + Math.random() * 60, c: STAR_COLOURS[randInt(5)], p: Math.random() * 6,
+}));
+
+// ---------- Game flow ----------
+function newGame() {
+  Object.assign(game, {
+    score: 0, lives: 3, wave: 0, nextLife: 10000, newRank: -1, pending: 0, flash: 0,
+    laserTier: 0, laserKills: 0, beam: 0, challenge: false, challengeNo: 0, tally: false,
+  });
+  particles = []; texts = []; capsules = [];
+  fireQueued = false;
+  resetPlayer();
+  startWave();
+  game.state = 'playing';
+}
+
+function startWave() {
+  game.wave++;
+  aliens = []; incoming = []; groups = [];
+  // Queue every alien to fly in, group by group, in single file
+  FLY_GROUPS.forEach((g, gi) => {
+    const members = [];
+    LAYOUT.forEach((r, row) => { if (g.rows.includes(row)) r.cols.forEach(col => members.push({ type: r.type, row, col })); });
+    groups.push({ size: members.length, killed: 0 });
+    members.forEach((m, i) => incoming.push({
+      ...m, state: 'entering', alive: true, rot: 0, seed: Math.random() * 10, fromEntry: true,
+      group: gi, path: PATHS[g.path], s: 0, enterAt: gi * GROUP_GAP + i * FILE_GAP,
+    }));
+  });
+  incoming.sort((a, b) => a.enterAt - b.enterAt);
+  game.waveClock = 0;
+  game.flyIn = true;
+  pBullets = []; aBullets = [];
+  game.waveTimer = 2;
+  game.diveTimer = 2.5;
+  sfxWave();
+}
+
+function startChallenge() {
+  Object.assign(game, { challenge: true, hits: 0, tally: false, perfectBonus: 0 });
+  game.challengeNo++;
+  aliens = []; incoming = []; groups = [];
+  // Rotate the first four groups and swap left/right on alternate stages for variety
+  const shift = game.challengeNo % CH_GROUPS.length, swap = game.challengeNo % 2 === 0;
+  const flip = n => !swap ? n : n.endsWith('L') ? n.slice(0, -1) + 'R' : n.endsWith('R') ? n.slice(0, -1) + 'L' : n;
+  const order = [...CH_GROUPS.slice(shift), ...CH_GROUPS.slice(0, shift), CH_FINALE];
+  order.forEach((g, gi) => {
+    for (let m = 0; m < 8; m++) {
+      incoming.push({
+        type: g.flags && m < g.flags ? 'flag' : g.type, row: 0, col: 0,
+        state: 'challenge', alive: true, rot: 0, seed: 0, s: 0,
+        path: CH_PATHS[flip(g.paths[m % g.paths.length])],
+        enterAt: gi * CH_GROUP_GAP + Math.floor(m / g.paths.length) * FILE_GAP,
+      });
+    }
+  });
+  incoming.sort((a, b) => a.enterAt - b.enterAt);
+  game.challengeTotal = incoming.length;
+  game.waveClock = 0;
+  game.flyIn = false;
+  game.waveTimer = 2.5;
+  pBullets = []; aBullets = [];
+  sfxWave();
+}
+
+function endChallenge() {
+  game.tally = true;
+  if (game.hits === game.challengeTotal) {
+    game.perfectBonus = wavePoints(CH_PERFECT);
+    addScore(game.perfectBonus);
+    sfxExtra();
+  }
+}
+
+// After a wave or challenge stage is cleared
+function nextStage() {
+  if (game.challenge) { game.challenge = false; game.tally = false; startWave(); }
+  else if (game.wave % CH_EVERY === 0) startChallenge();
+  else startWave();
+}
+
+function gameOver() {
+  game.overTimer = 0.6; // ignore keys briefly so a held fire key doesn't skip anything
+  game.newRank = -1;
+  if (qualifies(game.score)) {
+    game.state = 'entry';
+    game.entry = loadInitials().split('');
+    game.entryPos = 0;
+  } else game.state = 'gameover';
+}
+
+// ---------- Initials entry ----------
+const ENTRY_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ';
+function handleEntryKey(e) {
+  if (game.overTimer > 0) return;
+  const p = game.entryPos, cur = game.entry;
+  if (e.code === 'Enter') { submitEntry(); return; }
+  if (e.code === 'ArrowLeft') game.entryPos = Math.max(0, p - 1);
+  else if (e.code === 'ArrowRight') game.entryPos = Math.min(2, p + 1);
+  else if (e.code === 'ArrowUp' || e.code === 'ArrowDown') {
+    const i = ENTRY_CHARS.indexOf(cur[p]), step = e.code === 'ArrowUp' ? 1 : -1;
+    cur[p] = ENTRY_CHARS[(i + step + ENTRY_CHARS.length) % ENTRY_CHARS.length];
+  } else if (e.code === 'Backspace') {
+    e.preventDefault();
+    game.entryPos = Math.max(0, p - 1);
+    cur[game.entryPos] = ' ';
+  } else if (!e.repeat && /^[a-z0-9]$/i.test(e.key)) {
+    cur[p] = e.key.toUpperCase();
+    game.entryPos = Math.min(2, p + 1);
+  }
+}
+
+function submitEntry() {
+  const name = game.entry.join('').trim() ? game.entry.join('') : '???';
+  const rec = { name, score: game.score, wave: game.wave };
+  topScores.push(rec);
+  topScores.sort((a, b) => b.score - a.score);
+  topScores = topScores.slice(0, TOP_SIZE);
+  game.newRank = topScores.indexOf(rec);
+  game.hi = topScores[0].score;
+  saveTop();
+  saveInitials(name);
+  game.state = 'gameover';
+  game.overTimer = 0.6;
+}
+
+function togglePause() {
+  if (game.state === 'playing') game.state = 'paused';
+  else if (game.state === 'paused') game.state = 'playing';
+}
+
+function addScore(p) {
+  game.score += p;
+  game.hi = Math.max(game.hi, game.score);
+  if (game.score >= game.nextLife) { game.lives++; game.nextLife += 25000; sfxExtra(); }
+}
+
+// ---------- Player ----------
+function resetPlayer() {
+  player = { x: W / 2, y: H - 70, vx: 0, alive: true, inv: 2, cool: 0, respawn: 0, double: 0, rapid: 0, shield: 0 };
+}
+
+function updatePlayer(dt) {
+  if (!player.alive) {
+    player.respawn -= dt;
+    if (player.respawn <= 0) {
+      if (game.lives > 0) { player.alive = true; player.inv = 2; player.x = W / 2; }
+      else gameOver();
+    }
+    return;
+  }
+  let dx = 0;
+  if (keys.ArrowLeft || keys.KeyA) dx -= 1;
+  if (keys.ArrowRight || keys.KeyD) dx += 1;
+  player.vx = dx * (game.beam > 0 ? 120 : 240); // half speed while the laser fires
+  player.x = clamp(player.x + player.vx * dt, 16, W - 16);
+  player.inv = Math.max(0, player.inv - dt);
+  for (const p of ['double', 'rapid', 'shield']) player[p] = Math.max(0, player[p] - dt);
+  player.cool -= dt;
+
+  if (game.beam > 0) { fireQueued = false; return; } // no normal shots during the laser
+  const volley = player.double > 0 ? 2 : 1;
+  const maxShots = (player.rapid > 0 ? 4 : 2) * volley;
+  if ((keys.Space || keys.ArrowUp || fireQueued) && player.cool <= 0 && pBullets.length + volley <= maxShots) {
+    if (volley === 2) pBullets.push({ x: player.x - 7, y: player.y - 10 }, { x: player.x + 7, y: player.y - 10 });
+    else pBullets.push({ x: player.x, y: player.y - 14 });
+    player.cool = player.rapid > 0 ? 0.12 : 0.28;
+    fireQueued = false;
+    sfxShoot();
+  }
+}
+
+// A hit is absorbed by the shield if one is up, otherwise it costs a life
+function hitPlayer() {
+  if (player.shield > 0) {
+    player.shield = 0;
+    player.inv = 1;
+    explode(player.x, player.y, POWERS.shield.colour, 14);
+    sfxShield();
+    return;
+  }
+  killPlayer();
+}
+
+function killPlayer() {
+  player.alive = false;
+  player.respawn = 2.2;
+  player.double = player.rapid = player.shield = 0;
+  game.beam = 0; // the laser bar itself keeps its charge
+  game.lives--;
+  explode(player.x, player.y, '#ffffff', 30);
+  explode(player.x, player.y, '#ff4040', 20);
+  sfxDie();
+}
+
+// ---------- Laser skill ----------
+const laserHalf = () => FIB[Math.min(game.laserTier, FIB.length - 1)] * LASER_SCALE;
+const laserFull = () => laserHalf() * 2;
+
+function chargeLaser() {
+  if (game.beam <= 0) game.laserKills = Math.min(laserFull(), game.laserKills + 1);
+}
+
+function fireLaser() {
+  if (game.state !== 'playing' || !player.alive || game.beam > 0) return;
+  const k = game.laserKills, full = laserFull();
+  if (k < full / 2) return;
+  game.beam = k >= full ? 2 : k >= full * 0.75 ? 1.5 : 1;
+  game.laserKills = 0;
+  game.laserTier++;
+  sfxLaser(game.beam);
+}
+
+// ---------- Power-ups ----------
+function dropCapsule(x, y) {
+  const types = Object.keys(POWERS);
+  capsules.push({ x, y, type: types[randInt(types.length)] });
+}
+
+function collectCapsule(c) {
+  if (c.type === 'bomb') smartBomb();
+  else player[c.type] = POWER_TIME;
+  texts.push({ x: c.x, y: c.y - 14, text: POWERS[c.type].name, life: 1.2 });
+  sfxPower();
+}
+
+function smartBomb() {
+  game.flash = 0.3;
+  for (const a of aliens) if (a.alive && a.state !== 'formation') killAlien(a, 'bomb');
+  noise(0.6, 0.2);
+}
+
+// ---------- Aliens ----------
+// ---------- Dive patterns ----------
+// chase: loop then track the player | weave: loop then S-curve | circle: loop, swoop down and back up
+// pincer: pairs from opposite sides crossing near the player | kamikaze: wobble then straight fast drop
+const PATTERN_WAVE = { chase: 1, weave: 1, circle: 2, pincer: 3, kamikaze: 5 };
+const PREFERRED = { flag: 'chase', red: 'chase', purple: 'circle', blue: 'weave' };
+const KAMIKAZE_CHANCE = 0.15;
+
+function pickPattern(a) {
+  if (a.type === 'flag') return 'chase';
+  if (game.wave >= PATTERN_WAVE.kamikaze && Math.random() < KAMIKAZE_CHANCE) return 'kamikaze';
+  const open = ['chase', 'weave', 'circle', 'pincer'].filter(p => game.wave >= PATTERN_WAVE[p]);
+  const pref = PREFERRED[a.type];
+  if (open.includes(pref) && Math.random() < 0.6) return pref;
+  return open[randInt(open.length)];
+}
+
+const inX = v => clamp(v, 20, W - 20);
+function circlePath(a) {
+  const s = a.x < W / 2 ? 1 : -1, x = a.x, y = a.y; // swing towards the centre
+  return buildPath([
+    [[x, y], [x, y + 160], [inX(x + s * 40), 430], [inX(x + s * 120), 430]],
+    [[inX(x + s * 120), 430], [inX(x + s * 200), 430], [inX(x + s * 200), 300], [inX(x + s * 120), 280]],
+  ]);
+}
+function pincerPath(a) {
+  const x = a.x, y = a.y, C = [clamp(player.x, 60, W - 60), 470], dx = C[0] - x;
+  const E = [clamp(C[0] + dx * 0.6, -20, W + 20), H + 30];
+  return buildPath([
+    [[x, y], [x, y + 120], [C[0] - dx * 0.4, C[1] - 80], C],
+    [C, [C[0] + dx * 0.3, C[1] + 60], [E[0], H], E],
+  ]);
+}
+
+function launchDive(a, pattern = 'chase') {
+  a.state = 'diving';
+  a.pattern = pattern;
+  a.shots = pattern === 'kamikaze' ? 0 : 1 + randInt(Math.min(1 + game.wave, 4));
+  a.burst = 0;
+  a.leader = null;
+  if (pattern === 'pincer') { a.phase = 'path'; a.path = pincerPath(a); a.s = 0; a.exitAfter = true; return; }
+  if (pattern === 'kamikaze') { a.phase = 'wobble'; a.wob = 0.4; return; }
+  a.phase = 'loop';
+  a.dir = a.x < W / 2 ? -1 : 1; // loop outwards, away from centre
+  a.cx = a.x + a.dir * LOOP_R; a.cy = a.y;
+  a.ang = a.dir < 0 ? 0 : Math.PI;
+  a.turned = 0;
+}
+
+// After the opening loop, continue with the alien's pattern
+function endLoop(a) {
+  if (a.pattern === 'weave') { a.phase = 'weave'; a.wx0 = a.x; a.wt = 0; }
+  else if (a.pattern === 'circle') { a.phase = 'path'; a.path = circlePath(a); a.s = 0; a.exitAfter = false; }
+  else a.phase = 'dive';
+}
+
+// Leave the bottom of the screen, re-enter at the top and head home
+function wrapToTop(a) { a.y = -20; a.x = homeX(a); a.phase = 'return'; }
+
+function tryDive() {
+  const d = diff();
+  if (aliens.filter(a => a.state !== 'formation').length >= d.maxDivers) return;
+  const pool = aliens.filter(a => a.state === 'formation');
+  if (!pool.length) return;
+  const flags = pool.filter(a => a.type === 'flag');
+  const a = flags.length && Math.random() < 0.25 ? flags[randInt(flags.length)] : pool[randInt(pool.length)];
+  let pattern = pickPattern(a);
+  if (pattern === 'pincer') {
+    // Needs a blue or purple partner from the other half of the formation
+    const pair = p => p.type === 'blue' || p.type === 'purple';
+    const partners = pair(a) ? pool.filter(p => p !== a && pair(p) && (p.x < W / 2) !== (a.x < W / 2)) : [];
+    if (partners.length) {
+      launchDive(a, 'pincer');
+      launchDive(partners[randInt(partners.length)], 'pincer');
+      sfxDive();
+      return;
+    }
+    pattern = 'chase';
+  }
+  launchDive(a, pattern);
+  sfxDive();
+  // Flagships take up to two red escorts with them
+  if (a.type === 'flag') {
+    const escorts = pool.filter(e => e.type === 'red' && Math.abs(e.col - a.col) <= 1.5).slice(0, 2);
+    escorts.forEach((e, i) => {
+      launchDive(e);
+      e.leader = a; e.ox = i === 0 ? -22 : 22; e.oy = 20;
+    });
+    a.escorts = a.escortsLeft = escorts.length;
+  }
+}
+
+function fireAlien(a) {
+  if (aBullets.length >= 14) return;
+  const vy = diff().shotSpeed;
+  let vx;
+  if (game.wave >= 2) {
+    // Lead the target: aim where the player will be when the shot arrives
+    const t = Math.max(0.2, (player.y - a.y) / vy);
+    const targetX = player.x + player.vx * t + (Math.random() - 0.5) * 30;
+    vx = clamp((targetX - a.x) / t, -160, 160);
+  } else {
+    vx = clamp((player.x - a.x) * 0.4, -80, 80);
+  }
+  aBullets.push({ x: a.x, y: a.y + 10, vx, vy });
+}
+
+function updateAlien(a, dt) {
+  const px = a.x, py = a.y, d = diff();
+  if (a.state === 'formation') {
+    a.x = homeX(a); a.y = homeY(a);
+    a.rot = easeAngle(a.rot, 0, Math.min(1, dt * 6));
+    return;
+  }
+  if (a.state === 'challenge') {
+    // Fly through along the set path, then leave the screen for good
+    a.s += flySpeed() * dt;
+    if (a.s >= a.path.total) a.alive = false;
+    else { const p = pathAt(a.path, a.s); a.x = p.x; a.y = p.y; }
+  }
+  else if (a.state === 'entering') {
+    // Fly in along the group's path, then peel off to the formation slot
+    a.s += flySpeed() * dt;
+    if (a.s >= a.path.total) { a.state = 'diving'; a.phase = 'return'; }
+    else { const p = pathAt(a.path, a.s); a.x = p.x; a.y = p.y; }
+    if (a.shots > 0 && player.alive && a.y < player.y - 150 && Math.random() < 0.3 * dt) { a.shots--; fireAlien(a); }
+  }
+  // Escorts follow their flagship until it dies or heads home
+  else if (a.leader) {
+    const L = a.leader;
+    if (L.alive && L.state === 'diving' && L.phase !== 'return') {
+      a.x = L.x + a.ox; a.y = L.y + a.oy; a.phase = L.phase;
+    } else {
+      a.leader = null;
+      if (a.phase === 'loop') a.phase = 'dive';
+    }
+  }
+  if (!a.leader) {
+    if (a.phase === 'loop') {
+      const w = d.speed / LOOP_R;
+      a.ang += a.dir * w * dt;
+      a.turned += w * dt;
+      a.x = a.cx + Math.cos(a.ang) * LOOP_R;
+      a.y = a.cy + Math.sin(a.ang) * LOOP_R;
+      if (a.turned >= Math.PI) endLoop(a);
+    } else if (a.phase === 'dive') {
+      const target = player.x + Math.sin(game.t * 2.5 + a.seed) * 70;
+      a.x += clamp((target - a.x) * 1.5, -d.speed, d.speed) * dt;
+      a.y += d.speed * 1.1 * dt;
+      if (a.y > H + 20) wrapToTop(a);
+    } else if (a.phase === 'weave') {
+      a.wt += dt;
+      a.x = clamp(a.wx0 + Math.sin(a.wt * 2.2) * 120, 16, W - 16);
+      a.y += d.speed * dt;
+      if (a.y > H + 20) wrapToTop(a);
+    } else if (a.phase === 'path') {
+      a.s += d.speed * 1.1 * dt;
+      if (a.s >= a.path.total) { if (a.exitAfter) wrapToTop(a); else a.phase = 'return'; }
+      else { const p = pathAt(a.path, a.s); a.x = p.x; a.y = p.y; }
+    } else if (a.phase === 'wobble') {
+      a.wob -= dt;
+      a.x = homeX(a) + Math.sin(game.t * 40) * 3; a.y = homeY(a);
+      if (a.wob <= 0) {
+        // Lock on to where the player is now and drop straight at it
+        const dx = player.x - a.x, dy = player.y + 20 - a.y, n = Math.hypot(dx, dy) || 1;
+        a.kvx = dx / n; a.kvy = dy / n; a.phase = 'kamikaze';
+      }
+    } else if (a.phase === 'kamikaze') {
+      a.x += a.kvx * d.speed * 2 * dt; a.y += a.kvy * d.speed * 2 * dt;
+      if (a.y > H + 20 || a.x < -30 || a.x > W + 30) wrapToTop(a);
+    } else if (a.phase === 'return') {
+      const hx = homeX(a), hy = homeY(a);
+      const dx = hx - a.x, dy = hy - a.y, dist = Math.hypot(dx, dy);
+      const step = (a.fromEntry ? flySpeed() * 0.8 : d.speed) * dt;
+      if (dist <= step) { a.state = 'formation'; a.fromEntry = false; a.x = hx; a.y = hy; }
+      else { a.x += dx / dist * step; a.y += dy / dist * step; }
+    }
+  }
+  // Firing: single shots on wave 1-2, bursts of 2-3 from wave 3 (circle-back only fires on the way down)
+  const firePhase = a.phase === 'dive' || a.phase === 'weave' || (a.phase === 'path' && a.y > py);
+  if (!firePhase) a.burst = 0;
+  if (a.burst > 0) {
+    a.burstTimer -= dt;
+    if (a.burstTimer <= 0) { a.burst--; a.burstTimer = 0.12; fireAlien(a); }
+  } else if (firePhase && a.shots > 0 && player.alive && a.y > 160 && a.y < player.y - 120
+      && Math.random() < d.fireRate * dt) {
+    a.shots--;
+    fireAlien(a);
+    if (game.wave >= 3) { a.burst = 1 + randInt(2); a.burstTimer = 0.12; }
+  }
+  // Face the direction of travel (sprites are drawn facing up)
+  if (a.phase === 'return') a.rot = easeAngle(a.rot, 0, Math.min(1, dt * 4));
+  else if (a.phase === 'wobble') a.rot = Math.sin(game.t * 40) * 0.25;
+  else {
+    const mx = a.x - px, my = a.y - py;
+    if (mx * mx + my * my > 0.01) a.rot = Math.atan2(my, mx) + Math.PI / 2;
+  }
+}
+
+// cause: 'shot' | 'beam' | 'bomb' | 'crash'
+function killAlien(a, cause) {
+  a.alive = false;
+  const T = TYPES[a.type], entering = a.state === 'entering', diving = a.state === 'diving';
+  const challenge = a.state === 'challenge';
+  let base = diving ? T.divePts : challenge ? CH_HIT : T.pts; // fly-in kills score formation points...
+  if (a.type === 'flag' && diving && a.escorts > 0 && a.escortsLeft === 0) base = 300; // escorts first bonus
+  if (a.leader && a.leader.alive) a.leader.escortsLeft--;
+  let pts = wavePoints(base);
+  if (entering) pts += chainPoints(++groups[a.group].killed); // ...plus the group chain bonus
+  if (challenge) game.hits++;
+  addScore(pts);
+  chargeLaser(); // ignored while the beam is firing
+  if (diving || entering || challenge) texts.push({ x: a.x, y: a.y, text: String(pts), life: 1 });
+  explode(a.x, a.y, T.pal['#'], 16);
+  sfxBoom();
+  // No drops from smart-bomb kills, during the fly-in or in challenge stages
+  if (cause !== 'bomb' && !entering && !challenge && (a.type === 'flag' || (diving && Math.random() < DIVER_DROP_CHANCE))) dropCapsule(a.x, a.y);
+}
+
+// ---------- Effects ----------
+function explode(x, y, colour, n) {
+  for (let i = 0; i < n; i++) {
+    const ang = Math.random() * Math.PI * 2, sp = 40 + Math.random() * 160;
+    particles.push({ x, y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, life: 0.4 + Math.random() * 0.4, c: colour });
+  }
+}
+
+// ---------- Input ----------
+const keys = {};
+let fireQueued = false; // catches taps shorter than one frame
+window.addEventListener('keydown', e => {
+  if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space'].includes(e.code)) e.preventDefault();
+  keys[e.code] = true;
+  if (game.state === 'entry') { handleEntryKey(e); return; }
+  if (e.repeat) return;
+  initAudio();
+  if ((e.code === 'Space' || e.code === 'ArrowUp') && game.state === 'playing') fireQueued = true;
+  if (['ArrowDown', 'KeyZ', 'KeyX', 'KeyN', 'KeyM'].includes(e.code)) fireLaser();
+  if (e.code === 'KeyQ') muted = !muted;
+  if (e.code === 'Enter' || e.code === 'Space') {
+    if (game.state === 'title' || (game.state === 'gameover' && game.overTimer <= 0)) newGame();
+  }
+  if (e.code === 'KeyP' || e.code === 'Escape') togglePause();
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+
+// Focus: when embedded in another page, keys only reach the game after it has been clicked
+let hasFocus = document.hasFocus();
+window.addEventListener('focus', () => { hasFocus = true; });
+window.addEventListener('blur', () => {
+  hasFocus = false;
+  for (const k in keys) keys[k] = false;
+  if (game.state === 'playing') game.state = 'paused';
+});
+canvas.addEventListener('mousedown', () => {
+  window.focus();
+  hasFocus = true;
+  initAudio();
+  if (game.state === 'title' || (game.state === 'gameover' && game.overTimer <= 0)) newGame();
+  else if (game.state === 'paused') game.state = 'playing';
+});
+
+// ---------- Update ----------
+function update(dt) {
+  if (game.state === 'paused') return;
+  game.t += dt;
+  game.flash = Math.max(0, game.flash - dt);
+
+  for (const s of stars) { s.y += s.s * dt; if (s.y > H) { s.y = 0; s.x = Math.random() * W; } }
+  for (const p of particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt; }
+  particles = particles.filter(p => p.life > 0);
+  for (const t of texts) { t.y -= 20 * dt; t.life -= dt; }
+  texts = texts.filter(t => t.life > 0);
+
+  if (game.state === 'gameover' || game.state === 'entry') { game.overTimer -= dt; return; }
+  if (game.state !== 'playing') return;
+
+  sway = Math.sin(game.t * 0.9) * 40;
+  game.waveTimer = Math.max(0, game.waveTimer - dt);
+
+  updatePlayer(dt);
+  if (game.state !== 'playing') return; // player may have just run out of lives
+
+  // Release queued aliens into the fly-in (single shots allowed from wave 3)
+  game.waveClock += dt;
+  while (incoming.length && incoming[0].enterAt <= game.waveClock) {
+    const a = incoming.shift(), p = pathAt(a.path, 0);
+    a.x = p.x; a.y = p.y;
+    a.shots = game.wave >= 3 ? 1 : 0;
+    aliens.push(a);
+  }
+
+  // Launch dives (only once the fly-in is complete, and not while the player is respawning)
+  const d = diff();
+  if (game.waveTimer <= 0 && !game.flyIn && player.alive) {
+    game.diveTimer -= dt;
+    if (game.diveTimer <= 0) { tryDive(); game.diveTimer = d.interval * (0.6 + Math.random() * 0.8); }
+    // From wave 4 the formation fires too
+    if (d.formFire && Math.random() < d.formFire * dt) {
+      const pool = aliens.filter(a => a.state === 'formation');
+      if (pool.length) fireAlien(pool[randInt(pool.length)]);
+    }
+  }
+  for (const a of aliens) updateAlien(a, dt);
+  if (game.flyIn && !incoming.length && !aliens.some(a => a.fromEntry)) {
+    game.flyIn = false;
+    game.diveTimer = 1.5;
+  }
+
+  // Laser beam: anything touching it explodes (kills here don't charge the bar)
+  if (game.beam > 0) {
+    if (player.alive) {
+      for (const a of aliens) {
+        if (a.alive && a.y < player.y && Math.abs(a.x - player.x) < 10 + BEAM_W / 2) killAlien(a, 'beam');
+      }
+    }
+    game.beam = Math.max(0, game.beam - dt);
+  }
+
+  // Bullets
+  for (const b of pBullets) b.y -= 520 * dt;
+  pBullets = pBullets.filter(b => b.y > -10);
+  for (const b of aBullets) { b.x += b.vx * dt; b.y += b.vy * dt; }
+  aBullets = aBullets.filter(b => b.y < H + 10);
+
+  // Player bullets vs aliens
+  for (const b of pBullets) {
+    for (const a of aliens) {
+      if (a.alive && overlap(b.x, b.y, 3, 10, a.x, a.y, 20, 14)) { killAlien(a, 'shot'); b.dead = true; break; }
+    }
+  }
+  pBullets = pBullets.filter(b => !b.dead);
+
+  // Capsules fall and are collected by touching them
+  for (const c of capsules) c.y += 90 * dt;
+  if (player.alive) {
+    for (const c of capsules) {
+      if (!c.taken && overlap(c.x, c.y, 16, 16, player.x, player.y, 26, 20)) { c.taken = true; collectCapsule(c); }
+    }
+  }
+  capsules = capsules.filter(c => !c.taken && c.y < H + 10);
+
+  // Alien bullets and divers vs player
+  if (player.alive && player.inv <= 0) {
+    for (const b of aBullets) {
+      if (overlap(b.x, b.y, 3, 8, player.x, player.y, 20, 16)) { b.dead = true; hitPlayer(); break; }
+    }
+    aBullets = aBullets.filter(b => !b.dead);
+    if (player.alive && player.inv <= 0) {
+      for (const a of aliens) {
+        if (a.alive && a.state !== 'formation' && a.state !== 'challenge'
+            && overlap(a.x, a.y, 18, 14, player.x, player.y, 20, 16)) {
+          killAlien(a, 'crash'); hitPlayer(); break;
+        }
+      }
+    }
+  }
+  aliens = aliens.filter(a => a.alive);
+
+  // Wave or challenge stage cleared (a challenge shows its tally for 3 seconds)
+  if (!aliens.length && !incoming.length) {
+    if (game.pending <= 0) {
+      game.pending = game.challenge ? 3 : 1.5;
+      if (game.challenge) endChallenge();
+    } else { game.pending -= dt; if (game.pending <= 0) nextStage(); }
+  }
+}
+
+// ---------- Draw ----------
+function text(str, x, y, size, colour, align = 'center') {
+  ctx.font = `bold ${size}px "Courier New", monospace`;
+  ctx.textAlign = align;
+  ctx.fillStyle = colour;
+  ctx.fillText(str, x, y);
+}
+
+function drawSprite(img, x, y, rot = 0) {
+  ctx.save();
+  ctx.translate(Math.round(x), Math.round(y));
+  if (rot) ctx.rotate(rot);
+  paintSprite(img, -img.width / 2, -img.height / 2);
+  ctx.restore();
+}
+
+function drawCapsule(x, y, type, size = 16) {
+  const P = POWERS[type], h = size / 2;
+  ctx.fillStyle = P.colour; ctx.fillRect(x - h, y - h, size, size);
+  ctx.fillStyle = '#000'; ctx.fillRect(x - h + 2, y - h + 2, size - 4, size - 4);
+  text(P.letter, x, y + size * 0.3, Math.round(size * 0.75), P.colour);
+}
+
+function drawLaserBar() {
+  const x = 150, y = H - 24, w = 180, h = 8;
+  const full = laserFull(), k = game.laserKills, f = k / full;
+  const ready = f >= 0.5 && game.beam <= 0 && player.alive;
+  if (game.beam > 0) text('LASER FIRING', x, y - 5, 11, '#40e0ff', 'left');
+  else text(ready ? 'LASER READY [Z/X/N/M]' : 'LASER', x, y - 5, 11, ready ? '#ffd23f' : '#aaaaaa', 'left');
+  text(`${k}/${full}`, x + w, y - 5, 11, '#aaaaaa', 'right');
+  ctx.fillStyle = '#222222'; ctx.fillRect(x, y, w, h);
+  ctx.fillStyle = f >= 1 ? (Math.floor(game.t * 6) % 2 ? '#ff4040' : '#ffd23f')
+    : f >= 0.75 ? '#ff9a2e' : f >= 0.5 ? '#ffd23f' : '#666666';
+  ctx.fillRect(x, y, w * f, h);
+  // Markers at 50% (1s), 75% (1.5s) and 100% (2s)
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(x + w * 0.5, y - 2, 1, h + 4);
+  ctx.fillRect(x + w * 0.75, y - 2, 1, h + 4);
+}
+
+function drawHUD() {
+  text('SCORE', 16, 22, 14, '#ff4040', 'left');
+  text(String(game.score).padStart(6, '0'), 16, 40, 16, '#ffffff', 'left');
+  text('HI-SCORE', W / 2, 22, 14, '#ff4040');
+  text(String(game.hi).padStart(6, '0'), W / 2, 40, 16, '#ffffff');
+  if (muted) text('SOUND OFF', 16, 56, 11, '#888888', 'left');
+  // Wave flags and points multiplier, top right
+  for (let i = 0; i < Math.min(game.wave, 10); i++) {
+    const x = W - 20 - i * 12;
+    ctx.fillStyle = '#ffd23f'; ctx.fillRect(x, 18, 2, 18);
+    ctx.fillStyle = '#ff4040';
+    ctx.beginPath(); ctx.moveTo(x + 2, 18); ctx.lineTo(x + 10, 22); ctx.lineTo(x + 2, 26); ctx.fill();
+  }
+  if (game.wave > 1) text('PTS x' + waveMult().toFixed(2), W - 12, 54, 11, '#ffd23f', 'right');
+  // Spare lives, bottom left
+  for (let i = 0; i < Math.min(game.lives - (player && player.alive ? 1 : 0), 6); i++) {
+    paintSprite(PLAYER_IMG, 12 + i * 20, H - 22, 13, 10);
+  }
+  drawLaserBar();
+  // Active power-up timers, bottom right
+  let px = W - 18;
+  for (const p of ['double', 'rapid', 'shield']) {
+    if (player[p] <= 0) continue;
+    drawCapsule(px, H - 26, p, 14);
+    ctx.fillStyle = POWERS[p].colour;
+    ctx.fillRect(px - 10, H - 14, 20 * player[p] / POWER_TIME, 3);
+    px -= 28;
+  }
+}
+
+function drawTable(y0, highlight) {
+  text('-- HIGH SCORES --', W / 2, y0, 16, '#38b6ff');
+  text('RANK  NAME    SCORE  WAVE', W / 2, y0 + 26, 12, '#aaaaaa');
+  for (let i = 0; i < TOP_SIZE; i++) {
+    const r = topScores[i], y = y0 + 54 + i * 26;
+    if (!r) { text(`${i + 1}.    ---      ---    --`, W / 2, y, 15, '#555555'); continue; }
+    const row = `${i + 1}.    ${r.name.padEnd(3)}  ${String(r.score).padStart(7)}    ${r.wave ? String(r.wave).padStart(2) : ' -'}`;
+    text(row, W / 2, y, 15, i === highlight ? '#ffd23f' : '#ffffff');
+  }
+}
+
+function drawTitle() {
+  const pulse = Math.floor(game.t * 2) % 2;
+  text('HI-SCORE ' + String(game.hi).padStart(6, '0'), W / 2, 36, 16, '#ff4040');
+  text('GALAXY', W / 2, 98, 48, '#ffd23f');
+  text('RAIDERS', W / 2, 146, 48, '#ff4040');
+  // Alternate every 6 seconds between the instructions and the high-score table
+  if (Math.floor(game.t / 6) % 2) {
+    drawTable(230, -1);
+    if (pulse) text(startPrompt(), W / 2, 600, 16, '#ffffff');
+    return;
+  }
+  text('-- SCORE ADVANCE TABLE --', W / 2, 192, 14, '#38b6ff');
+  text('CONVOY   DIVING', W / 2 + 40, 216, 13, '#aaaaaa');
+  ['flag', 'red', 'purple', 'blue'].forEach((k, i) => {
+    const y = 244 + i * 28, T = TYPES[k];
+    drawSprite(T.img[pulse], W / 2 - 110, y - 5);
+    text(`${String(T.pts).padStart(3)} PTS  ${String(T.divePts).padStart(3)} PTS`, W / 2 + 40, y, 15, '#ffffff');
+  });
+  text('Points +25% each wave. Flagship after escorts: 300', W / 2, 356, 11, '#ffd23f');
+  text('Fly-in chain: +8, +16, +24... per hit in a group', W / 2, 371, 11, '#ffd23f');
+  text('Bonus life at 10,000, then every 25,000', W / 2, 386, 11, '#ffd23f');
+  text('Challenge stage after every 3rd wave', W / 2, 401, 11, '#ffd23f');
+  text('-- POWER-UPS --', W / 2, 426, 14, '#38b6ff');
+  ['double', 'rapid', 'shield', 'bomb'].forEach((p, i) => {
+    const x = W / 2 - 150 + i * 100;
+    drawCapsule(x, 448, p, 18);
+    text(POWERS[p].name, x, 472, 10, '#ffffff');
+  });
+  text('LASER: kills charge the bar. Fire at 50%+', W / 2, 500, 11, '#40e0ff');
+  text('50% = 1s   75% = 1.5s   100% = 2s beam', W / 2, 515, 11, '#40e0ff');
+  text('LEFT RIGHT / A D  MOVE    UP / SPACE  FIRE', W / 2, 544, 12, '#aaaaaa');
+  text('DOWN / Z X N M  LASER    P  PAUSE    Q  MUTE', W / 2, 562, 12, '#aaaaaa');
+  if (pulse) text(startPrompt(), W / 2, 600, 16, '#ffffff');
+}
+
+const startPrompt = () => hasFocus ? 'PRESS ENTER OR CLICK TO START' : 'CLICK TO PLAY';
+
+function draw() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+
+  for (const s of stars) {
+    if (Math.sin(game.t * 3 + s.p) > -0.3) { ctx.fillStyle = s.c; ctx.fillRect(s.x | 0, s.y | 0, 2, 2); }
+  }
+
+  if (game.state === 'title') { drawTitle(); return; }
+
+  const frame = Math.floor(game.t * 2.5) % 2;
+  for (const a of aliens) drawSprite(TYPES[a.type].img[frame], a.x, a.y, a.rot);
+  for (const c of capsules) drawCapsule(c.x, c.y, c.type);
+
+  ctx.fillStyle = '#ffff80';
+  for (const b of pBullets) ctx.fillRect(b.x - 1, b.y - 5, 2, 10);
+  ctx.fillStyle = '#ff6060';
+  for (const b of aBullets) ctx.fillRect(b.x - 1.5, b.y - 4, 3, 8);
+
+  // Laser beam: soft glow with a narrow white core (only the core destroys)
+  if (game.beam > 0 && player.alive) {
+    const bottom = player.y - 12;
+    ctx.globalAlpha = 0.25 + Math.random() * 0.15;
+    ctx.fillStyle = '#40e0ff';
+    ctx.fillRect(player.x - 7, 0, 14, bottom);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(player.x - BEAM_W / 2, 0, BEAM_W, bottom);
+  }
+
+  if (player.alive && !(player.inv > 0 && Math.floor(game.t * 12) % 2)) drawSprite(PLAYER_IMG, player.x, player.y);
+  if (player.alive && player.shield > 0 && !(player.shield < 2 && Math.floor(game.t * 8) % 2)) {
+    ctx.strokeStyle = POWERS.shield.colour;
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(player.x, player.y, 19, 0, Math.PI * 2); ctx.stroke();
+  }
+
+  for (const p of particles) {
+    ctx.globalAlpha = clamp(p.life * 2, 0, 1);
+    ctx.fillStyle = p.c;
+    ctx.fillRect(p.x | 0, p.y | 0, 3, 3);
+  }
+  ctx.globalAlpha = 1;
+  for (const t of texts) text(t.text, t.x, t.y, 14, '#ffffff');
+
+  if (game.flash > 0) {
+    ctx.fillStyle = `rgba(255,255,255,${game.flash})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  drawHUD();
+
+  if (game.waveTimer > 0 && game.state === 'playing') {
+    text(game.challenge ? 'CHALLENGE STAGE' : 'WAVE ' + game.wave, W / 2, 480, 28, '#38b6ff'); // below the fly-in paths
+  }
+  if (game.tally) {
+    text('CHALLENGE STAGE COMPLETE', W / 2, 250, 18, '#38b6ff');
+    text(`HITS ${game.hits} / ${game.challengeTotal}`, W / 2, 292, 24, '#ffffff');
+    if (game.perfectBonus) text('PERFECT!  BONUS ' + game.perfectBonus, W / 2, 332, 20, '#ffd23f');
+  }
+  if (game.state === 'paused') {
+    ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(0, 0, W, H);
+    text('PAUSED', W / 2, H / 2, 36, '#ffffff');
+    text('PRESS P OR CLICK TO RESUME', W / 2, H / 2 + 34, 14, '#aaaaaa');
+  }
+  if (game.state === 'entry') {
+    ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(0, 0, W, H);
+    text('NEW HIGH SCORE!', W / 2, 190, 30, '#ffd23f');
+    text('SCORE ' + game.score, W / 2, 228, 20, '#ffffff');
+    text('ENTER YOUR INITIALS', W / 2, 286, 16, '#38b6ff');
+    for (let i = 0; i < 3; i++) {
+      const x = W / 2 - 50 + i * 50, current = i === game.entryPos;
+      const c = game.entry[i] === ' ' ? '_' : game.entry[i];
+      text(c, x, 350, 40, current && Math.floor(game.t * 4) % 2 ? '#ffd23f' : '#ffffff');
+      if (current) { ctx.fillStyle = '#ffd23f'; ctx.fillRect(x - 14, 360, 28, 3); }
+    }
+    text('TYPE LETTERS, OR UP/DOWN TO CHANGE', W / 2, 410, 12, '#aaaaaa');
+    text('LEFT/RIGHT TO MOVE, ENTER TO SAVE', W / 2, 428, 12, '#aaaaaa');
+  }
+  if (game.state === 'gameover') {
+    ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(0, 0, W, H);
+    text('GAME OVER', W / 2, 150, 44, '#ff4040');
+    text('SCORE ' + game.score, W / 2, 190, 20, '#ffffff');
+    if (game.newRank === 0) text('NEW HIGH SCORE!', W / 2, 222, 18, '#ffd23f');
+    else if (game.newRank > 0) text('YOU RANKED #' + (game.newRank + 1), W / 2, 222, 18, '#ffd23f');
+    drawTable(270, game.newRank);
+    if (game.overTimer <= 0 && Math.floor(game.t * 2) % 2) text('PRESS ENTER OR CLICK TO PLAY AGAIN', W / 2, 490, 16, '#ffffff');
+  }
+}
+
+// ---------- Main loop ----------
+let last = performance.now(), loopError = null;
+function loop(now) {
+  requestAnimationFrame(loop); // schedule first so an error can't freeze the game
+  const dt = clamp((now - last) / 1000, 0, 0.05); // first frame's timestamp can precede `last`
+  last = now;
+  try {
+    update(dt);
+    draw();
+  } catch (err) {
+    if (!loopError) { loopError = err; console.error(err); }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    text('ERROR: ' + err.message, W / 2, H - 40, 12, '#ff4040');
+  }
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
