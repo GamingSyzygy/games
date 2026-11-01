@@ -34,12 +34,13 @@ const randInt = n => Math.floor(Math.random() * n);
 // Centre-based box overlap test
 const overlap = (ax, ay, aw, ah, bx, by, bw, bh) =>
   Math.abs(ax - bx) * 2 < aw + bw && Math.abs(ay - by) * 2 < ah + bh;
-// Ease angle r toward target by fraction k, taking the shortest way round
-function easeAngle(r, target, k) {
+// Signed shortest turn from angle r to target
+function angleDiff(r, target) {
   const TAU = Math.PI * 2;
-  const d = ((target - r + Math.PI) % TAU + TAU) % TAU - Math.PI;
-  return r + d * k;
+  return ((target - r + Math.PI) % TAU + TAU) % TAU - Math.PI;
 }
+// Ease angle r toward target by fraction k, taking the shortest way round
+const easeAngle = (r, target, k) => r + angleDiff(r, target) * k;
 
 // ---------- Sprites (drawn from text maps) ----------
 const PX = 2; // screen pixels per sprite pixel
@@ -150,6 +151,23 @@ const FIB = [1, 2, 3, 5, 8, 13, 21, 34, 55, 89];
 const LASER_SCALE = 10;
 const BEAM_W = 3; // ~10% of the ship's width
 
+// ---------- Cheats (type CHEAP on the title or game-over screen) ----------
+// Toggles last until the page is reloaded; any advanced cheat halves every score increment
+const CHEATS = [
+  { id: 'double',     name: 'DOUBLE SHOT',        desc: 'Double shot is always on', adv: false },
+  { id: 'rapid',      name: 'RAPID FIRE',         desc: 'Rapid fire is always on', adv: false },
+  { id: 'shieldLife', name: 'SHIELD PER LIFE',    desc: 'One-hit shield at the start of each life', adv: false },
+  { id: 'shieldWave', name: 'SHIELD PER WAVE',    desc: 'One-hit shield at the start of each wave', adv: false },
+  { id: 'doubleUp',   name: 'DOUBLE UP',          desc: 'Power-ups and laser last twice as long', adv: true },
+  { id: 'laserFeed',  name: 'LASER CONTRIBUTION', desc: 'Laser kills charge the bar; full bar extends the beam', adv: true },
+  { id: 'homing',     name: 'HOMING FIRE',        desc: 'Shots lock on to the nearest enemy ship', adv: true },
+];
+const cheats = {};
+const anyCheat = () => CHEATS.some(c => cheats[c.id]);
+const advCheat = () => CHEATS.some(c => c.adv && cheats[c.id]);
+const powerTime = () => POWER_TIME * (cheats.doubleUp ? 2 : 1);
+const SHOT_SPEED = 520, HOMING_TURN = 9, HOMING_LIFE = 2.5; // homing turn rate in radians per second
+
 // ---------- Sound (generated with Web Audio) ----------
 let actx = null, muted = false;
 function initAudio() {
@@ -217,6 +235,7 @@ const game = {
   t: 0, waveTimer: 0, diveTimer: 0, pending: 0, overTimer: 0, flash: 0,
   laserTier: 0, laserKills: 0, beam: 0, waveClock: 0, flyIn: false,
   challenge: false, challengeNo: 0, hits: 0, challengeTotal: 0, tally: false, perfectBonus: 0,
+  cheatFrom: 'title', cheatSel: 0, cheatReset: 0, laserMsg: null, // cheatReset: 0 idle, 1 confirming, 2 cleared
 };
 let player = null, aliens = [], pBullets = [], aBullets = [], particles = [], texts = [], capsules = [];
 let incoming = [], groups = []; // aliens still waiting to fly in, and fly-in group tallies
@@ -346,7 +365,7 @@ const stars = Array.from({ length: 90 }, () => ({
 function newGame() {
   Object.assign(game, {
     score: 0, lives: 3, wave: 0, nextLife: 10000, newRank: -1, pending: 0, flash: 0,
-    laserTier: 0, laserKills: 0, beam: 0, challenge: false, challengeNo: 0, tally: false,
+    laserTier: 0, laserKills: 0, beam: 0, challenge: false, challengeNo: 0, tally: false, laserMsg: null,
   });
   particles = []; texts = []; capsules = [];
   fireQueued = false;
@@ -374,6 +393,7 @@ function startWave() {
   pBullets = []; aBullets = [];
   game.waveTimer = 2;
   game.diveTimer = 2.5;
+  if (cheats.shieldWave) player.shield = Infinity; // no stacking: a shield is either up or not
   sfxWave();
 }
 
@@ -407,8 +427,7 @@ function startChallenge() {
 function endChallenge() {
   game.tally = true;
   if (game.hits === game.challengeTotal) {
-    game.perfectBonus = wavePoints(CH_PERFECT);
-    addScore(game.perfectBonus);
+    game.perfectBonus = addScore(wavePoints(CH_PERFECT));
     sfxExtra();
   }
 }
@@ -470,22 +489,29 @@ function togglePause() {
   else if (game.state === 'paused') game.state = 'playing';
 }
 
+// Returns the points actually scored (halved, to the nearest 5, while an advanced cheat is on)
 function addScore(p) {
+  if (advCheat()) p = Math.round(p / 10) * 5;
   game.score += p;
   game.hi = Math.max(game.hi, game.score);
   if (game.score >= game.nextLife) { game.lives++; game.nextLife += 25000; sfxExtra(); }
+  return p;
 }
 
 // ---------- Player ----------
 function resetPlayer() {
-  player = { x: W / 2, y: H - 70, vx: 0, alive: true, inv: 2, cool: 0, respawn: 0, double: 0, rapid: 0, shield: 0 };
+  player = { x: W / 2, y: H - 70, vx: 0, alive: true, inv: 2, cool: 0, respawn: 0, double: 0, rapid: 0,
+    shield: cheats.shieldLife ? Infinity : 0 }; // cheat shields last until hit
 }
 
 function updatePlayer(dt) {
   if (!player.alive) {
     player.respawn -= dt;
     if (player.respawn <= 0) {
-      if (game.lives > 0) { player.alive = true; player.inv = 2; player.x = W / 2; }
+      if (game.lives > 0) {
+        player.alive = true; player.inv = 2; player.x = W / 2;
+        if (cheats.shieldLife) player.shield = Infinity;
+      }
       else gameOver();
     }
     return;
@@ -500,15 +526,30 @@ function updatePlayer(dt) {
   player.cool -= dt;
 
   if (game.beam > 0) { fireQueued = false; return; } // no normal shots during the laser
-  const volley = player.double > 0 ? 2 : 1;
-  const maxShots = (player.rapid > 0 ? 4 : 2) * volley;
+  const volley = player.double > 0 || cheats.double ? 2 : 1;
+  const rapid = player.rapid > 0 || cheats.rapid;
+  const maxShots = (rapid ? 4 : 2) * volley;
   if ((keys.Space || keys.ArrowUp || fireQueued) && player.cool <= 0 && pBullets.length + volley <= maxShots) {
-    if (volley === 2) pBullets.push({ x: player.x - 7, y: player.y - 10 }, { x: player.x + 7, y: player.y - 10 });
-    else pBullets.push({ x: player.x, y: player.y - 14 });
-    player.cool = player.rapid > 0 ? 0.12 : 0.28;
+    const shots = volley === 2 ? [{ x: player.x - 7, y: player.y - 10 }, { x: player.x + 7, y: player.y - 10 }]
+      : [{ x: player.x, y: player.y - 14 }];
+    if (cheats.homing) lockTargets(shots);
+    pBullets.push(...shots);
+    player.cool = rapid ? 0.12 : 0.28;
     fireQueued = false;
     sfxShoot();
   }
+}
+
+// Homing fire cheat: lock each shot on to the nearest on-screen enemy (second shot of a pair takes the next nearest)
+const onScreen = a => a.x > -10 && a.x < W + 10 && a.y > -10 && a.y < H + 10;
+function lockTargets(shots) {
+  const dist = a => Math.hypot(a.x - player.x, a.y - player.y);
+  const near = aliens.filter(a => a.alive && onScreen(a)).sort((a, b) => dist(a) - dist(b));
+  shots.forEach((b, i) => {
+    if (!near.length) return; // nothing to aim at: fly straight
+    b.target = near[Math.min(i, near.length - 1)];
+    b.vx = 0; b.vy = -SHOT_SPEED; b.life = HOMING_LIFE;
+  });
 }
 
 // A hit is absorbed by the shield if one is up, otherwise it costs a life
@@ -538,15 +579,34 @@ function killPlayer() {
 const laserHalf = () => FIB[Math.min(game.laserTier, FIB.length - 1)] * LASER_SCALE;
 const laserFull = () => laserHalf() * 2;
 
+const beamTime = base => base * (cheats.doubleUp ? 2 : 1);
+const laserMsg = text => { game.laserMsg = { text, life: 2 }; };
+
+// Kills don't charge the bar while the beam fires, unless the laser contribution cheat is on
 function chargeLaser() {
-  if (game.beam <= 0) game.laserKills = Math.min(laserFull(), game.laserKills + 1);
+  if (game.beam > 0 && !cheats.laserFeed) return;
+  const before = game.laserKills, full = laserFull();
+  game.laserKills = Math.min(full, before + 1);
+  if (game.beam > 0) {
+    // Filling the bar mid-beam extends the beam by a full charge and moves on to the next tier
+    if (game.laserKills >= full) {
+      game.beam += beamTime(2);
+      game.laserKills = 0;
+      game.laserTier++;
+      sfxLaser(beamTime(2));
+    }
+    return;
+  }
+  if (before < full / 2 && game.laserKills >= full / 2) laserMsg('LASER READY');
+  if (before < full && game.laserKills >= full) laserMsg('LASER MAX');
 }
 
 function fireLaser() {
   if (game.state !== 'playing' || !player.alive || game.beam > 0) return;
   const k = game.laserKills, full = laserFull();
   if (k < full / 2) return;
-  game.beam = k >= full ? 2 : k >= full * 0.75 ? 1.5 : 1;
+  game.beam = beamTime(k >= full ? 2 : k >= full * 0.75 ? 1.5 : 1);
+  game.laserMsg = null;
   game.laserKills = 0;
   game.laserTier++;
   sfxLaser(game.beam);
@@ -560,7 +620,7 @@ function dropCapsule(x, y) {
 
 function collectCapsule(c) {
   if (c.type === 'bomb') smartBomb();
-  else player[c.type] = POWER_TIME;
+  else player[c.type] = Math.max(player[c.type], powerTime()); // never shortens a cheat shield
   texts.push({ x: c.x, y: c.y - 14, text: POWERS[c.type].name, life: 1.2 });
   sfxPower();
 }
@@ -781,8 +841,8 @@ function killAlien(a, cause) {
   let pts = wavePoints(base);
   if (entering) pts += chainPoints(++groups[a.group].killed); // ...plus the group chain bonus
   if (challenge) game.hits++;
-  addScore(pts);
-  chargeLaser(); // ignored while the beam is firing
+  pts = addScore(pts);
+  chargeLaser();
   if (diving || entering || challenge) texts.push({ x: a.x, y: a.y, text: String(pts), life: 1 });
   explode(a.x, a.y, T.pal['#'], 16);
   sfxBoom();
@@ -798,6 +858,68 @@ function explode(x, y, colour, n) {
   }
 }
 
+// ---------- Cheat menu ----------
+let cheatBuf = '';
+// Watches for C-H-E-A-P typed on the title or game-over screen; returns true when the menu opens
+function typedCheat(e) {
+  if (!/^[a-z]$/i.test(e.key)) return false;
+  cheatBuf = (cheatBuf + e.key.toUpperCase()).slice(-5);
+  if (cheatBuf !== 'CHEAP') return false;
+  cheatBuf = '';
+  game.cheatFrom = game.state;
+  game.cheatSel = 0;
+  game.cheatReset = 0;
+  game.state = 'cheats';
+  sfxPower();
+  return true;
+}
+
+// Menu rows: each cheat, then the high-score reset (index RESET_ROW)
+const RESET_ROW = CHEATS.length;
+function cheatRowY(i) {
+  if (i === RESET_ROW) return 444;
+  const c = CHEATS[i], k = CHEATS.slice(0, i).filter(x => x.adv === c.adv).length;
+  return (c.adv ? 348 : 170) + k * 28;
+}
+
+function selectCheat(i) {
+  if (i !== game.cheatSel) game.cheatReset = 0; // moving away cancels a pending reset
+  game.cheatSel = i;
+}
+
+// Toggle a cheat, or step the reset row through confirm -> cleared
+function activateCheat() {
+  if (game.cheatSel === RESET_ROW) {
+    if (game.cheatReset !== 1) { game.cheatReset = 1; tone(440, 0.08, 'square', 0.04); return; }
+    topScores = [];
+    saveTop();
+    game.hi = 0;
+    game.newRank = -1;
+    game.cheatReset = 2;
+    sfxShield();
+    return;
+  }
+  const id = CHEATS[game.cheatSel].id;
+  cheats[id] = !cheats[id];
+  tone(cheats[id] ? 880 : 440, 0.08, 'square', 0.04);
+}
+
+function handleCheatKey(e) {
+  const n = RESET_ROW + 1;
+  if (e.code === 'ArrowUp') selectCheat((game.cheatSel + n - 1) % n);
+  else if (e.code === 'ArrowDown') selectCheat((game.cheatSel + 1) % n);
+  else if (e.code === 'Escape') { game.cheatReset = 0; game.state = game.cheatFrom; }
+  else if (!e.repeat && ['Enter', 'Space', 'ArrowLeft', 'ArrowRight'].includes(e.code)) activateCheat();
+}
+
+function clickCheat(e) {
+  const r = canvas.getBoundingClientRect(), y = (e.clientY - r.top) * H / r.height;
+  for (let i = 0; i <= RESET_ROW; i++) {
+    const ry = cheatRowY(i);
+    if (y > ry - 20 && y < ry + 8) { selectCheat(i); activateCheat(); return; }
+  }
+}
+
 // ---------- Input ----------
 const keys = {};
 let fireQueued = false; // catches taps shorter than one frame
@@ -805,8 +927,10 @@ window.addEventListener('keydown', e => {
   if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space'].includes(e.code)) e.preventDefault();
   keys[e.code] = true;
   if (game.state === 'entry') { handleEntryKey(e); return; }
+  if (game.state === 'cheats') { initAudio(); handleCheatKey(e); return; }
   if (e.repeat) return;
   initAudio();
+  if ((game.state === 'title' || game.state === 'gameover') && typedCheat(e)) return;
   if ((e.code === 'Space' || e.code === 'ArrowUp') && game.state === 'playing') fireQueued = true;
   if (['ArrowDown', 'KeyZ', 'KeyX', 'KeyN', 'KeyM'].includes(e.code)) fireLaser();
   if (e.code === 'KeyQ') muted = !muted;
@@ -825,10 +949,11 @@ window.addEventListener('blur', () => {
   for (const k in keys) keys[k] = false;
   if (game.state === 'playing') game.state = 'paused';
 });
-canvas.addEventListener('mousedown', () => {
+canvas.addEventListener('mousedown', e => {
   window.focus();
   hasFocus = true;
   initAudio();
+  if (game.state === 'cheats') { clickCheat(e); return; }
   if (game.state === 'title' || (game.state === 'gameover' && game.overTimer <= 0)) newGame();
   else if (game.state === 'paused') game.state = 'playing';
 });
@@ -850,6 +975,7 @@ function update(dt) {
 
   sway = Math.sin(game.t * 0.9) * 40;
   game.waveTimer = Math.max(0, game.waveTimer - dt);
+  if (game.laserMsg && (game.laserMsg.life -= dt) <= 0) game.laserMsg = null;
 
   updatePlayer(dt);
   if (game.state !== 'playing') return; // player may have just run out of lives
@@ -880,7 +1006,7 @@ function update(dt) {
     game.diveTimer = 1.5;
   }
 
-  // Laser beam: anything touching it explodes (kills here don't charge the bar)
+  // Laser beam: anything touching it explodes (kills here only charge the bar with the cheat on)
   if (game.beam > 0) {
     if (player.alive) {
       for (const a of aliens) {
@@ -888,18 +1014,30 @@ function update(dt) {
       }
     }
     game.beam = Math.max(0, game.beam - dt);
+    // Bar topped up past 50% by laser kills: it's ready again as soon as the beam ends
+    if (game.beam <= 0 && player.alive && game.laserKills >= laserHalf()) laserMsg('LASER READY');
   }
 
-  // Bullets
-  for (const b of pBullets) b.y -= 520 * dt;
-  pBullets = pBullets.filter(b => b.y > -10);
+  // Bullets (homing shots turn towards their target, and vanish if it dies or leaves the screen)
+  for (const b of pBullets) {
+    if (!b.target) { b.y -= SHOT_SPEED * dt; continue; }
+    const t = b.target;
+    if (!t.alive || !onScreen(t) || (b.life -= dt) <= 0) { b.dead = true; continue; }
+    const ang = Math.atan2(b.vy, b.vx);
+    const turn = clamp(angleDiff(ang, Math.atan2(t.y - b.y, t.x - b.x)), -HOMING_TURN * dt, HOMING_TURN * dt);
+    b.vx = Math.cos(ang + turn) * SHOT_SPEED; b.vy = Math.sin(ang + turn) * SHOT_SPEED;
+    b.x += b.vx * dt; b.y += b.vy * dt;
+  }
+  pBullets = pBullets.filter(b => !b.dead && b.y > -10 && b.y < H + 10 && b.x > -10 && b.x < W + 10);
   for (const b of aBullets) { b.x += b.vx * dt; b.y += b.vy * dt; }
   aBullets = aBullets.filter(b => b.y < H + 10);
 
   // Player bullets vs aliens
   for (const b of pBullets) {
     for (const a of aliens) {
-      if (a.alive && overlap(b.x, b.y, 3, 10, a.x, a.y, 20, 14)) { killAlien(a, 'shot'); b.dead = true; break; }
+      if (a.alive && overlap(b.x, b.y, b.target ? 6 : 3, b.target ? 6 : 10, a.x, a.y, 20, 14)) {
+        killAlien(a, 'shot'); b.dead = true; break;
+      }
     }
   }
   pBullets = pBullets.filter(b => !b.dead);
@@ -985,6 +1123,7 @@ function drawHUD() {
   text('HI-SCORE', W / 2, 22, 14, '#ff4040');
   text(String(game.hi).padStart(6, '0'), W / 2, 40, 16, '#ffffff');
   if (muted) text('SOUND OFF', 16, 56, 11, '#888888', 'left');
+  if (anyCheat()) text(advCheat() ? 'CHEATS ON - PTS HALVED' : 'CHEATS ON', W / 2, 56, 11, '#ff9a2e');
   // Wave flags and points multiplier, top right
   for (let i = 0; i < Math.min(game.wave, 10); i++) {
     const x = W - 20 - i * 12;
@@ -1001,10 +1140,10 @@ function drawHUD() {
   // Active power-up timers, bottom right
   let px = W - 18;
   for (const p of ['double', 'rapid', 'shield']) {
-    if (player[p] <= 0) continue;
+    if (player[p] <= 0 && !cheats[p]) continue;
     drawCapsule(px, H - 26, p, 14);
     ctx.fillStyle = POWERS[p].colour;
-    ctx.fillRect(px - 10, H - 14, 20 * player[p] / POWER_TIME, 3);
+    ctx.fillRect(px - 10, H - 14, 20 * (cheats[p] ? 1 : Math.min(1, player[p] / powerTime())), 3);
     px -= 28;
   }
 }
@@ -1023,6 +1162,7 @@ function drawTable(y0, highlight) {
 function drawTitle() {
   const pulse = Math.floor(game.t * 2) % 2;
   text('HI-SCORE ' + String(game.hi).padStart(6, '0'), W / 2, 36, 16, '#ff4040');
+  if (anyCheat()) text(advCheat() ? 'CHEATS ON - PTS HALVED' : 'CHEATS ON', W / 2, 54, 11, '#ff9a2e');
   text('GALAXY', W / 2, 98, 48, '#ffd23f');
   text('RAIDERS', W / 2, 146, 48, '#ff4040');
   // Alternate every 6 seconds between the instructions and the high-score table
@@ -1057,6 +1197,26 @@ function drawTitle() {
 
 const startPrompt = () => hasFocus ? 'PRESS ENTER OR CLICK TO START' : 'CLICK TO PLAY';
 
+function drawCheats() {
+  text('CHEATS', W / 2, 84, 40, '#ff9a2e');
+  text('-- BASIC --', W / 2, 140, 14, '#38b6ff');
+  text('-- ADVANCED --', W / 2, 300, 14, '#38b6ff');
+  text('ANY ENABLED: ALL SCORES HALVED', W / 2, 318, 11, '#ff9a2e');
+  CHEATS.forEach((c, i) => {
+    const y = cheatRowY(i), sel = i === game.cheatSel;
+    if (sel) text('>', 70, y, 15, '#ffd23f', 'left');
+    text(c.name, 90, y, 15, sel ? '#ffd23f' : '#ffffff', 'left');
+    text(cheats[c.id] ? 'ON' : 'OFF', 400, y, 15, cheats[c.id] ? '#5cff6a' : '#666666', 'right');
+  });
+  const y = cheatRowY(RESET_ROW), sel = game.cheatSel === RESET_ROW;
+  if (sel) text('>', 70, y, 15, '#ffd23f', 'left');
+  text(['RESET HIGH SCORES', 'PRESS AGAIN TO CONFIRM', 'HIGH SCORES CLEARED'][game.cheatReset], 90, y, 15,
+    game.cheatReset === 1 ? '#ff4040' : sel ? '#ffd23f' : '#ffffff', 'left');
+  text(sel ? 'Clears the top 5 in this browser' : CHEATS[game.cheatSel].desc, W / 2, 486, 12, '#aaaaaa');
+  text('UP/DOWN SELECT   ENTER/SPACE OR CLICK', W / 2, 530, 12, '#aaaaaa');
+  text('ESC TO CLOSE', W / 2, 550, 12, '#aaaaaa');
+}
+
 function draw() {
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, W, H);
@@ -1066,13 +1226,20 @@ function draw() {
   }
 
   if (game.state === 'title') { drawTitle(); return; }
+  if (game.state === 'cheats') { drawCheats(); return; }
 
   const frame = Math.floor(game.t * 2.5) % 2;
   for (const a of aliens) drawSprite(TYPES[a.type].img[frame], a.x, a.y, a.rot);
   for (const c of capsules) drawCapsule(c.x, c.y, c.type);
 
   ctx.fillStyle = '#ffff80';
-  for (const b of pBullets) ctx.fillRect(b.x - 1, b.y - 5, 2, 10);
+  for (const b of pBullets) {
+    if (!b.target) { ctx.fillRect(b.x - 1, b.y - 5, 2, 10); continue; }
+    ctx.save(); // homing shots point along their path
+    ctx.translate(b.x, b.y); ctx.rotate(Math.atan2(b.vy, b.vx) + Math.PI / 2);
+    ctx.fillRect(-1, -5, 2, 10);
+    ctx.restore();
+  }
   ctx.fillStyle = '#ff6060';
   for (const b of aBullets) ctx.fillRect(b.x - 1.5, b.y - 4, 3, 8);
 
@@ -1111,6 +1278,9 @@ function draw() {
 
   if (game.waveTimer > 0 && game.state === 'playing') {
     text(game.challenge ? 'CHALLENGE STAGE' : 'WAVE ' + game.wave, W / 2, 480, 28, '#38b6ff'); // below the fly-in paths
+  }
+  if (game.laserMsg && game.state === 'playing' && Math.floor(game.t * 6) % 2) {
+    text(game.laserMsg.text, W / 2, 440, 22, game.laserMsg.text === 'LASER MAX' ? '#ff4040' : '#ffd23f');
   }
   if (game.tally) {
     text('CHALLENGE STAGE COMPLETE', W / 2, 250, 18, '#38b6ff');
