@@ -7,7 +7,7 @@ Browser games, one folder per game. Each game is a self-contained `index.html` t
 | Game | Folder | Status | Play |
 |---|---|---|---|
 | Galaxy Raiders | [`galaxy-raiders/`](galaxy-raiders/) | Playable | https://gamingsyzygy.github.io/games/galaxy-raiders/ |
-| Manix Miner | [`manix-miner/`](manix-miner/) | In development | Not yet published |
+| Cavern Miner | [`cavern-miner/`](cavern-miner/) | Playable | https://gamingsyzygy.github.io/games/cavern-miner/ |
 
 The site root (https://gamingsyzygy.github.io/games/) is a menu linking to each game.
 
@@ -20,7 +20,9 @@ The site root (https://gamingsyzygy.github.io/games/) is a menu linking to each 
 ├── galaxy-raiders/
 │   ├── index.html        Game entry point
 │   └── README.md
-└── manix-miner/
+└── cavern-miner/
+    ├── index.html        Game entry point
+    ├── title.jpg         Title-screen artwork
     └── README.md
 ```
 

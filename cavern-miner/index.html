@@ -1,0 +1,1278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cavern Miner</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas { display: block; background: #05050f; image-rendering: pixelated; image-rendering: crisp-edges; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+'use strict';
+
+// ---------- Setup ----------
+const TILE = 12, COLS = 32, ROWS = 16;
+const VW = COLS * TILE;          // 384 logical pixels wide
+const PLAY_H = ROWS * TILE;      // 192 play area
+const HUD_H = 24;
+const VH = PLAY_H + HUD_H;       // 216 (16:9)
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let SCALE = 1;
+
+// The canvas backing store is an integer multiple of the logical size, so pixel art
+// stays crisp and text renders at full resolution.
+function fitCanvas() {
+  const css = Math.min(window.innerWidth / VW, window.innerHeight / VH);
+  const dpr = window.devicePixelRatio || 1;
+  SCALE = Math.max(1, Math.min(8, Math.ceil(css * dpr)));
+  canvas.width = VW * SCALE;
+  canvas.height = VH * SCALE;
+  canvas.style.width = Math.floor(VW * css) + 'px';
+  canvas.style.height = Math.floor(VH * css) + 'px';
+}
+window.addEventListener('resize', fitCanvas);
+fitCanvas();
+
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const pad = n => String(Math.max(0, Math.floor(n))).padStart(6, '0');
+const overlap = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+function hash(a, b, s = 0) {
+  let h = (Math.imul(a | 0, 374761393) + Math.imul(b | 0, 668265263) + Math.imul(s | 0, 1442695041)) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+// ---------- Tiles ----------
+// .  empty          #  rock (solid)       B  brick (solid)
+// -  ledge (stand on it, jump up through it)
+// ~  crumbling ledge (collapses if you stand on it)
+// ^  spikes         v  stalactite (falls when you pass beneath)
+// *  sparkle        o  oil flask          E  exit       P  player start
+// s  slime          b  bat
+const VALID_CHARS = '.#B-~^v*oEPsb';
+const isSolidCh = ch => ch === '#' || ch === 'B';
+const isOneWayCh = ch => ch === '-' || ch === '~';
+const isSupportCh = ch => isSolidCh(ch) || isOneWayCh(ch);
+
+// ---------- Caverns ----------
+const DEFAULT_LEVELS = [
+  { name: 'The Old Dig', oil: 90, map: [
+    '################################',
+    '#..............................#',
+    '#...................v..........#',
+    '#..............................#',
+    '#...*..........*...........*...#',
+    '#..............................#',
+    '#.-------....------.....------.#',
+    '#..............................#',
+    '#..............................#',
+    '#.....------.........------....#',
+    '#..............................#',
+    '#...............o..............#',
+    '#-----.....--------.......-----#',
+    '#..............................#',
+    '#P......*.....s.....^^.....*.E.#',
+    '################################',
+  ]},
+  { name: 'Moss Gallery', oil: 90, map: [
+    '################################',
+    '#..............................#',
+    '#.*..........................*.#',
+    '#BBBB......................BBBB#',
+    '#..............*...............#',
+    '#..............................#',
+    '#....-----..............-----..#',
+    '#...................b..........#',
+    '#.o............................#',
+    '#BBB.......------------.....BBB#',
+    '#.......b......................#',
+    '#...............*..............#',
+    '#....------..~~~~~~..------....#',
+    '#..............................#',
+    '#P......*.......^^.....s.....E.#',
+    '################################',
+  ]},
+  { name: 'Drip Halls', oil: 80, map: [
+    '################################',
+    '#..v.......v.......v.......v...#',
+    '#..............................#',
+    '#..*.......*...........*.......#',
+    '#......................b.......#',
+    '#..............................#',
+    '#-------...######...----------.#',
+    '#.........#.....v#.............#',
+    '#.........#....*.#...........*.#',
+    '#...------#......#------.......#',
+    '#..........................b...#',
+    '#..........................o...#',
+    '#.------........----.....------#',
+    '#..............................#',
+    '#P.....^^..s.......*..^^.....E.#',
+    '################################',
+  ]},
+  { name: 'The Sunken Arches', oil: 80, map: [
+    '################################',
+    '#..............................#',
+    '#..............*...............#',
+    '#.............BBBB.............#',
+    '#..*.......................*...#',
+    '#..............................#',
+    '#BBBBBB~~~...--------...~~~BBBB#',
+    '#..............................#',
+    '#.......b..............b.......#',
+    '#...-----....~~~~~~....-----...#',
+    '#..............................#',
+    '#.........o.........s..........#',
+    '#BBB....BBBBBBBBBBBBBBBB....BBB#',
+    '#..............................#',
+    '#P....^......*.......*...^...E.#',
+    '################################',
+  ]},
+  { name: "Lantern's End", oil: 70, map: [
+    '################################',
+    '#.........v..........v.........#',
+    '#..*......................*....#',
+    '#BBBBB...--------------...BBBBB#',
+    '#..............*...............#',
+    '#..................b...........#',
+    '#....~~--#..........#--~~......#',
+    '#........#.*..^^....#..........#',
+    '#........#BBBBBBBBBB#...b......#',
+    '#--~~~--.......o.........--~~--#',
+    '#..............................#',
+    '#.........*..........*.........#',
+    '#....------...----...------....#',
+    '#..............................#',
+    '#P....^^....s.....^^.....s..E..#',
+    '################################',
+  ]},
+]; // END LEVELS
+
+// ---------- Storage ----------
+const HI_KEY = 'cavernMiner.hi', LEVELS_KEY = 'cavernMiner.levels', MUTE_KEY = 'cavernMiner.mute';
+function load(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
+function store(key, val) {
+  try { if (val === null) localStorage.removeItem(key); else localStorage.setItem(key, val); return true; }
+  catch (e) { return false; }
+}
+
+function validateLevel(l) {
+  if (!l || typeof l !== 'object' || !Array.isArray(l.map)) return 'That is not a cavern.';
+  if (l.map.length !== ROWS) return `A cavern needs ${ROWS} rows.`;
+  let p = 0, e = 0, s = 0;
+  for (const row of l.map) {
+    if (typeof row !== 'string' || row.length !== COLS) return `Each row needs ${COLS} tiles.`;
+    for (const ch of row) {
+      if (!VALID_CHARS.includes(ch)) return `Unknown tile "${ch}".`;
+      if (ch === 'P') p++; else if (ch === 'E') e++; else if (ch === '*') s++;
+    }
+  }
+  if (p !== 1) return 'Place exactly one start (P).';
+  if (e !== 1) return 'Place exactly one exit (E).';
+  if (s < 1) return 'Place at least one sparkle (7).';
+  return null;
+}
+function cleanLevel(l) {
+  return { name: String(l.name || 'Unnamed cavern').slice(0, 24), oil: clamp(Math.round(+l.oil) || 90, 20, 300), map: l.map.slice() };
+}
+let customLevels = false;
+function loadLevels() {
+  const raw = load(LEVELS_KEY);
+  if (raw) {
+    try {
+      const ls = JSON.parse(raw);
+      if (Array.isArray(ls) && ls.length && ls.every(l => !validateLevel(l))) { customLevels = true; return ls.map(cleanLevel); }
+    } catch (e) { /* fall through to defaults */ }
+  }
+  customLevels = false;
+  return DEFAULT_LEVELS.map(cleanLevel);
+}
+function saveLevels() { customLevels = true; return store(LEVELS_KEY, JSON.stringify(levels)); }
+
+let levels = loadLevels();
+let hi = parseInt(load(HI_KEY), 10) || 0;
+
+// ---------- Sound ----------
+let actx = null, noiseBuf = null;
+let muted = load(MUTE_KEY) === '1';
+function ensureAudio() {
+  if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { actx = null; } }
+  if (actx && actx.state === 'suspended') actx.resume();
+}
+function tone(f, d, { type = 'square', vol = 0.06, slide = 0, delay = 0 } = {}) {
+  if (muted || !actx) return;
+  const t = actx.currentTime + delay;
+  const o = actx.createOscillator(), g = actx.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(f, t);
+  if (slide) o.frequency.linearRampToValueAtTime(Math.max(20, f + slide), t + d);
+  g.gain.setValueAtTime(vol, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+  o.connect(g).connect(actx.destination);
+  o.start(t); o.stop(t + d + 0.02);
+}
+function noise(d, { vol = 0.08, delay = 0, freq = 1200 } = {}) {
+  if (muted || !actx) return;
+  if (!noiseBuf) {
+    noiseBuf = actx.createBuffer(1, actx.sampleRate / 2, actx.sampleRate);
+    const ch = noiseBuf.getChannelData(0);
+    for (let i = 0; i < ch.length; i++) ch[i] = Math.random() * 2 - 1;
+  }
+  const t = actx.currentTime + delay;
+  const s = actx.createBufferSource(), f = actx.createBiquadFilter(), g = actx.createGain();
+  s.buffer = noiseBuf; f.type = 'lowpass'; f.frequency.value = freq;
+  g.gain.setValueAtTime(vol, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+  s.connect(f).connect(g).connect(actx.destination);
+  s.start(t); s.stop(t + d);
+}
+const SFX = {
+  jump() { tone(260, 0.14, { slide: 260, vol: 0.05 }); },
+  sparkle() { tone(988, 0.07, { type: 'triangle', vol: 0.08 }); tone(1480, 0.12, { type: 'triangle', vol: 0.07, delay: 0.06 }); },
+  oil() { tone(180, 0.2, { type: 'sine', vol: 0.12, slide: 240 }); },
+  open() { [523, 659, 784, 1047].forEach((f, i) => tone(f, 0.12, { type: 'triangle', vol: 0.07, delay: i * 0.08 })); },
+  die() { noise(0.35, { vol: 0.12, freq: 900 }); tone(440, 0.5, { type: 'sawtooth', vol: 0.05, slide: -380 }); },
+  crumble() { noise(0.2, { vol: 0.07, freq: 500 }); },
+  shake() { noise(0.15, { vol: 0.04, freq: 300 }); },
+  crash() { noise(0.25, { vol: 0.1, freq: 2200 }); },
+  clear() { [392, 523, 659, 784, 1047].forEach((f, i) => tone(f, 0.14, { vol: 0.05, delay: i * 0.09 })); },
+  tick() { tone(1200, 0.03, { vol: 0.025 }); },
+  cheat() { tone(330, 0.1, { vol: 0.06 }); tone(660, 0.2, { vol: 0.06, delay: 0.1 }); },
+  lowOil() { tone(110, 0.1, { type: 'sine', vol: 0.1 }); },
+  click() { tone(800, 0.03, { type: 'triangle', vol: 0.04 }); },
+};
+
+// ---------- Input ----------
+let keys = {}, pressed = {};
+let typed = '';
+const PREVENT = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space', 'Tab', 'Backspace']);
+window.addEventListener('keydown', e => {
+  ensureAudio();
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (PREVENT.has(e.code)) e.preventDefault();
+  if (!e.repeat) pressed[e.code] = true;
+  keys[e.code] = true;
+  keys.Shift = e.shiftKey;
+  // The cheat password is typed on the welcome screen, in any mix of capitals.
+  if (state === 'title' && e.key && e.key.length === 1) {
+    typed = (typed + e.key.toLowerCase()).slice(-5);
+    if (typed === 'cheap') { cheat = !cheat; typed = ''; cheatFlash = 90; SFX.cheat(); }
+  }
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; keys.Shift = e.shiftKey; });
+window.addEventListener('blur', () => { keys = {}; });
+const jumpPressed = () => pressed.Space || pressed.ArrowUp || pressed.KeyW;
+const confirmPressed = () => pressed.Enter || pressed.Space || pressed.NumpadEnter;
+
+// ---------- Drawing helpers ----------
+function px(g, col, x, y, w = 1, h = 1) { g.fillStyle = col; g.fillRect(x, y, w, h); }
+function text(s, x, y, { size = 8, color = '#e8ecff', align = 'left', bold = true, shadow = true } = {}) {
+  ctx.font = `${bold ? 'bold ' : ''}${size}px "Courier New", monospace`;
+  ctx.textAlign = align;
+  ctx.textBaseline = 'top';
+  if (shadow) { ctx.fillStyle = '#000'; ctx.fillText(s, x + 0.6, y + 0.6); }
+  ctx.fillStyle = color;
+  ctx.fillText(s, x, y);
+}
+function drawSprite(g, map, cols, x, y, flip) {
+  const w = map[0].length;
+  for (let r = 0; r < map.length; r++) {
+    const row = map[r];
+    for (let i = 0; i < w; i++) {
+      const ch = row[i];
+      if (ch === '.') continue;
+      g.fillStyle = cols[ch];
+      g.fillRect(x + (flip ? w - 1 - i : i), y + r, 1, 1);
+    }
+  }
+}
+
+// Palette taken from the cavern artwork: deep navy, purple rock, blue brick, moss green, sparkle yellow.
+const MOSS = '#8db32a', MOSS_DARK = '#5d7a1a';
+
+function drawMossTop(g, x, y, c, r) {
+  if (hash(c, r, 7) < 0.5) {
+    const mx = Math.floor(hash(c, r, 8) * 6);
+    px(g, MOSS, x + mx, y - 1, 5, 2);
+    px(g, MOSS_DARK, x + mx + 1, y + 1, 3, 1);
+  }
+}
+function drawRock(g, x, y, c, r, nb) {
+  px(g, '#2a2160', x, y, 12, 12);
+  for (let i = 0; i < 5; i++) {
+    const hx = Math.floor(hash(c, r, i) * 10), hy = Math.floor(hash(r, c, i + 9) * 10);
+    px(g, i % 2 ? '#3a2f80' : '#1d1748', x + hx, y + hy, 2, 2);
+  }
+  const up = !isSolidCh(nb(0, -1)), dn = !isSolidCh(nb(0, 1)), lf = !isSolidCh(nb(-1, 0)), rt = !isSolidCh(nb(1, 0));
+  if (lf) px(g, '#3a3190', x, y, 1, 12);
+  if (rt) px(g, '#15113a', x + 11, y, 1, 12);
+  if (dn) px(g, '#15113a', x, y + 10, 12, 2);
+  if (up) { px(g, '#4f86d8', x, y, 12, 2); px(g, '#3a5fb0', x, y + 2, 12, 1); drawMossTop(g, x, y, c, r); }
+  if (dn && hash(c, r, 11) < 0.4) {
+    const mx = 1 + Math.floor(hash(c, r, 12) * 9), len = 2 + Math.floor(hash(c, r, 13) * 6);
+    px(g, MOSS_DARK, x + mx, y + 12, 1, len);
+    px(g, MOSS, x + mx, y + 12, 1, Math.max(1, len - 2));
+  }
+}
+function drawBrick(g, x, y, c, r, nb) {
+  px(g, '#0f2654', x, y, 12, 12);
+  for (let i = 0; i < 4; i++) {
+    const off = ((r * 4 + i) & 1) ? 3 : 0;
+    for (let bx = -off; bx < 12; bx += 6) {
+      const x0 = Math.max(bx, 0), x1 = Math.min(bx + 5, 12);
+      if (x1 <= x0) continue;
+      px(g, hash(c * 7 + bx, r * 4 + i) < 0.3 ? '#2458a8' : '#2c6ec9', x + x0, y + i * 3, x1 - x0, 2);
+      px(g, '#4f94e6', x + x0, y + i * 3, x1 - x0, 1);
+    }
+  }
+  if (!isSolidCh(nb(0, -1))) { px(g, '#6aaaf0', x, y, 12, 1); drawMossTop(g, x, y, c, r); }
+}
+function drawLedge(g, x, y, c, r) {
+  px(g, '#1d3c7a', x, y, 12, 5);
+  px(g, '#3c74c8', x, y, 12, 4);
+  px(g, '#7ab0f0', x, y, 12, 1);
+  px(g, '#1d3c7a', x + 2 + Math.floor(hash(c, r, 2) * 8), y + 1, 1, 3);
+  if (hash(c, r, 3) < 0.4) px(g, MOSS, x + Math.floor(hash(c, r, 4) * 8), y - 1, 4, 1);
+}
+function drawCrumble(g, x, y, stage) {
+  const j = stage > 0 ? Math.round((Math.random() - 0.5) * 3 * stage) : 0;
+  y += j;
+  px(g, '#4a2f5a', x, y, 12, 5);
+  px(g, '#7a5590', x, y, 12, 1);
+  px(g, '#2a1838', x + 3, y + 1, 1, 4);
+  px(g, '#2a1838', x + 8, y + 2, 1, 3);
+  px(g, '#2a1838', x + 5, y + 3, 2, 1);
+  if (stage > 0.5) { px(g, '#05050f', x + 3, y, 1, 5); px(g, '#05050f', x + 8, y + 1, 1, 4); }
+}
+function drawSpikes(g, x, y) {
+  const widths = [4, 4, 3, 3, 2, 2, 1];
+  for (let k = 0; k < 3; k++) {
+    const bx = x + k * 4;
+    for (let h = 0; h < widths.length; h++) {
+      const w = widths[h], ox = bx + Math.floor((4 - w) / 2), yy = y + 11 - h;
+      px(g, '#d8f2ff', ox, yy, Math.ceil(w / 2), 1);
+      if (w > 1) px(g, '#6aa8e0', ox + Math.ceil(w / 2), yy, Math.floor(w / 2), 1);
+    }
+  }
+}
+function drawStalactite(g, x, y) {
+  const widths = [8, 8, 7, 6, 6, 5, 4, 4, 3, 2, 2, 1];
+  for (let i = 0; i < widths.length; i++) {
+    const w = widths[i], ox = x + Math.floor((8 - w) / 2);
+    px(g, '#3a2f80', ox, y + i, w, 1);
+    px(g, '#6a5ac8', ox, y + i, 1, 1);
+  }
+}
+function drawSparkle(g, cx, cy, t) {
+  const a = 3 + (Math.floor(t / 12) % 3 === 0 ? 1 : 0);
+  px(g, '#ffe94a', cx, cy - a, 1, a * 2 + 1);
+  px(g, '#ffe94a', cx - a, cy, a * 2 + 1, 1);
+  px(g, '#fff6b0', cx - 1, cy - 1, 3, 3);
+  px(g, '#ffffff', cx, cy, 1, 1);
+}
+function drawOil(g, x, y) {
+  px(g, '#a0a8c0', x + 3, y, 2, 3);
+  px(g, '#c86a1a', x + 1, y + 3, 6, 7);
+  px(g, '#ff9a3a', x + 2, y + 4, 4, 5);
+  px(g, '#ffd090', x + 2, y + 4, 1, 3);
+}
+function drawExit(g, x, y, open, t) {
+  px(g, '#1a2a5a', x, y + 2, 12, 22);
+  px(g, '#3c74c8', x + 2, y, 8, 2);
+  px(g, '#3c74c8', x, y + 2, 2, 22);
+  px(g, '#3c74c8', x + 10, y + 2, 2, 22);
+  px(g, '#7ab0f0', x + 2, y, 8, 1);
+  if (open) {
+    const cols = ['#e0fbff', '#8ff0ff', '#4fd1ff', '#2a8ac0'];
+    for (let i = 0; i < 21; i++) px(g, cols[(Math.floor(i / 3) + Math.floor(t / 5)) % 4], x + 2, y + 3 + i, 8, 1);
+  } else {
+    px(g, '#05050f', x + 2, y + 3, 8, 21);
+  }
+}
+
+const PLAYER_A = [
+  '...yyyy...', '..yyyyyyl.', '..yyyyyyll', '.yyyyyyyy.', '...sssks..', '...sssss..',
+  '....sss...', '..cccccc..', '.cccccccc.', '.cCccccCs.', '.sCccccC..', '..cccccc..',
+  '..kkkkkk..', '..pppppp..', '..pp..pp..', '..pp..pp..', '..bb..bb..', '.bbb..bbb.',
+];
+const PLAYER_B = PLAYER_A.slice(0, 13).concat(['..pppppp..', '..ppp.pp..', '.pp....pp.', '.bb....bb.', 'bbb....bbb']);
+const PCOL = { y: '#f2c230', l: '#fff6a0', s: '#f0b890', k: '#1a1030', c: '#3aa6a0', C: '#237570', b: '#6a4a2a', p: '#4a3a8a' };
+const SLIME_A = ['...gggg...', '..gggggg..', '.gwkggwkg.', '.gggggggg.', 'gggggggggg', 'gGggGgggGg', 'GGGGGGGGGG'];
+const SLIME_B = ['..........', '...gggg...', '.gggggggg.', 'gwkggggwkg', 'gggggggggg', 'gGggGgggGg', 'GGGGGGGGGG'];
+const SCOL = { g: '#7fd04a', G: '#3f8a2a', w: '#ffffff', k: '#10202a' };
+const BAT_A = ['m........m', 'mm..MM..mm', '.mmMrrMmm.', '..mMMMMm..', '...M..M...', '..........'];
+const BAT_B = ['..........', '....MM....', '...MrrM...', '.mmMMMMmm.', 'mm.M..M.mm', 'm........m'];
+const BCOL = { m: '#7a5ab8', M: '#3a2a6a', r: '#ff4a5a' };
+
+// Draws the unchanging parts of a cavern (background and fixed tiles) once, into its own canvas.
+function renderStatic(grid) {
+  const rows = grid.length, cols = grid[0].length, W = cols * TILE, H = rows * TILE;
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const g = cv.getContext('2d');
+  px(g, '#07061a', 0, 0, W, H);
+  for (let y = 0; y < H; y += 6) {
+    const off = (y / 6) % 2 ? 6 : 0;
+    for (let x = -off; x < W; x += 12) {
+      px(g, '#0c0f2e', x + 1, y + 1, 10, 4);
+      px(g, '#111642', x + 1, y + 1, 10, 1);
+    }
+  }
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+    if (hash(c, r, 21) < 0.3) { g.fillStyle = 'rgba(5,4,16,0.6)'; g.fillRect(c * TILE, r * TILE, TILE, TILE); }
+  }
+  const nbAt = (c, r) => (dc, dr) => {
+    const cc = c + dc, rr = r + dr;
+    if (cc < 0 || cc >= cols || rr < 0 || rr >= rows) return '#';
+    return grid[rr][cc];
+  };
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+    const ch = grid[r][c], x = c * TILE, y = r * TILE;
+    if (ch === '#') drawRock(g, x, y, c, r, nbAt(c, r));
+    else if (ch === 'B') drawBrick(g, x, y, c, r, nbAt(c, r));
+  }
+  // Ledges and spikes go on top so moss from the rock above doesn't cover them.
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+    const ch = grid[r][c], x = c * TILE, y = r * TILE;
+    if (ch === '-') drawLedge(g, x, y, c, r);
+    else if (ch === '^') drawSpikes(g, x, y);
+  }
+  return cv;
+}
+
+// ---------- Game state ----------
+const P_W = 8, P_H = 18;
+const GRAV = 0.32, JUMP_V = -5.4, RUN = 1.4, AIR_ACC = 0.12, MAX_FALL = 6;
+const CRUMBLE_T = 28;
+const START_LIVES = 3;
+
+let state = 'title';   // title | play | dying | clear | gameover | win | editor
+let paused = false;
+let cheat = false, cheatFlash = 0, runCheated = false;
+let testMode = false, testDef = null;
+let frame = 0, stateTimer = 0, banner = 0;
+let score = 0, lives = START_LIVES, levelIdx = 0, newHi = false;
+let run = null, player = null, enemies = [], stals = [], particles = [];
+let oil = 100;
+let deathReason = '';
+
+function makeRun(def) {
+  const base = def.map.map(r => r.split(''));
+  // Dimensions come from the map, so caverns larger than the screen only need the editor and validation to allow them.
+  const R = { def, base, rows: base.length, cols: base[0].length, grid: null, sparkles: [], oils: [], exit: { c: 1, r: 1 }, start: { c: 1, r: 1 },
+              enemyDefs: [], stalDefs: [], crumble: {}, standOn: [], open: false, staticCanvas: null };
+  for (let r = 0; r < R.rows; r++) for (let c = 0; c < R.cols; c++) {
+    const ch = base[r][c];
+    if (ch === '*') R.sparkles.push({ c, r, taken: false });
+    else if (ch === 'o') R.oils.push({ c, r, taken: false });
+    else if (ch === 'E') R.exit = { c, r };
+    else if (ch === 'P') R.start = { c, r };
+    else if (ch === 's' || ch === 'b') R.enemyDefs.push({ type: ch, c, r });
+    else if (ch === 'v') R.stalDefs.push({ c, r });
+    else continue;
+    base[r][c] = '.';
+  }
+  R.staticCanvas = renderStatic(base);
+  return R;
+}
+
+// Puts the miner, enemies, stalactites and crumbling ledges back. Collected sparkles stay collected.
+function resetActors() {
+  run.grid = run.base.map(r => r.slice());
+  run.crumble = {};
+  run.standOn = [];
+  player = { x: run.start.c * TILE + 2, y: (run.start.r + 1) * TILE - P_H, vx: 0, vy: 0, onGround: true,
+             face: 1, coyote: 0, jumpBuf: 0, anim: 0 };
+  enemies = run.enemyDefs.map(e => e.type === 's'
+    ? { type: 's', x: e.c * TILE + 1, y: (e.r + 1) * TILE - 7, w: 10, h: 7, vx: 0.45, anim: 0 }
+    : { type: 'b', x: e.c * TILE + 1, y0: e.r * TILE + 3, y: e.r * TILE + 3, w: 10, h: 6, vx: 0.8, t: Math.floor(hash(e.c, e.r) * 100) });
+  stals = run.stalDefs.map(s => ({ x: s.c * TILE + 2, y: s.r * TILE, w: 8, h: 12, state: 'hang', vy: 0, timer: 0 }));
+  oil = 100;
+  paused = false;
+}
+
+function tileAt(c, r) {
+  if (c < 0 || c >= run.cols || r < 0) return '#';
+  if (r >= run.rows) return '.';
+  return run.grid[r][c];
+}
+
+function startGame(idx) {
+  testMode = false;
+  score = 0; lives = START_LIVES; newHi = false;
+  runCheated = cheat;
+  startLevel(idx);
+}
+function startLevel(idx) {
+  levelIdx = idx;
+  run = makeRun(testMode ? testDef : levels[idx]);
+  resetActors();
+  particles = [];
+  state = 'play';
+  banner = 150;
+}
+function burst(x, y, n, cols, speed = 2) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, s = Math.random() * speed;
+    particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 1, life: 30 + Math.random() * 30, col: cols[i % cols.length] });
+  }
+}
+function die(reason) {
+  if (state !== 'play') return;
+  deathReason = reason || '';
+  state = 'dying'; stateTimer = 70;
+  if (!cheat && !testMode) lives--;
+  burst(player.x + P_W / 2, player.y + P_H / 2, 40, ['#f2c230', '#3aa6a0', '#f0b890', '#ffffff']);
+  SFX.die();
+}
+function levelClear() {
+  state = 'clear'; stateTimer = 0;
+  SFX.clear();
+}
+function nextLevel() {
+  if (testMode) { backToEditor('Cavern cleared in test play.'); return; }
+  if (levelIdx + 1 < levels.length) startLevel(levelIdx + 1);
+  else endRun('win');
+}
+function endRun(kind) {
+  state = kind; stateTimer = 0;
+  if (!runCheated && score > hi) { hi = score; newHi = true; store(HI_KEY, String(hi)); }
+}
+
+// ---------- Player ----------
+function updatePlayer() {
+  const p = player;
+  const dir = ((keys.ArrowRight || keys.KeyD) ? 1 : 0) - ((keys.ArrowLeft || keys.KeyA) ? 1 : 0);
+  if (dir) p.face = dir;
+  // Fixed-arc jump with a little steering in the air.
+  if (p.onGround) p.vx = dir * RUN;
+  else p.vx += clamp(dir * RUN - p.vx, -AIR_ACC, AIR_ACC);
+
+  if (jumpPressed()) p.jumpBuf = 6; else if (p.jumpBuf > 0) p.jumpBuf--;
+  if (p.onGround) p.coyote = 5; else if (p.coyote > 0) p.coyote--;
+  if (p.jumpBuf > 0 && p.coyote > 0) {
+    p.vy = JUMP_V; p.jumpBuf = 0; p.coyote = 0; p.onGround = false;
+    SFX.jump();
+  }
+  p.vy = Math.min(p.vy + GRAV, MAX_FALL);
+
+  // Horizontal move
+  p.x += p.vx;
+  const r0 = Math.floor(p.y / TILE), r1 = Math.floor((p.y + P_H - 0.001) / TILE);
+  if (p.vx > 0) {
+    const c = Math.floor((p.x + P_W - 0.001) / TILE);
+    for (let r = r0; r <= r1; r++) if (isSolidCh(tileAt(c, r))) { p.x = c * TILE - P_W; p.vx = 0; break; }
+  } else if (p.vx < 0) {
+    const c = Math.floor(p.x / TILE);
+    for (let r = r0; r <= r1; r++) if (isSolidCh(tileAt(c, r))) { p.x = (c + 1) * TILE; p.vx = 0; break; }
+  }
+
+  // Vertical move
+  const prevBottom = p.y + P_H;
+  p.y += p.vy;
+  p.onGround = false;
+  run.standOn = [];
+  const c0 = Math.floor(p.x / TILE), c1 = Math.floor((p.x + P_W - 0.001) / TILE);
+  if (p.vy >= 0) {
+    const r = Math.floor((p.y + P_H) / TILE);
+    let land = false;
+    for (let c = c0; c <= c1; c++) {
+      const t = tileAt(c, r);
+      if (isSolidCh(t) || (isOneWayCh(t) && prevBottom <= r * TILE + 0.01)) {
+        land = true;
+        if (t === '~') run.standOn.push(r * run.cols + c);
+      }
+    }
+    if (land) { p.y = r * TILE - P_H; p.vy = 0; p.onGround = true; }
+  } else {
+    const r = Math.floor(p.y / TILE);
+    for (let c = c0; c <= c1; c++) if (isSolidCh(tileAt(c, r))) { p.y = (r + 1) * TILE; p.vy = 0; break; }
+  }
+  if (p.onGround && p.vx !== 0) p.anim++;
+}
+
+function updateCrumbles() {
+  for (const key of run.standOn) {
+    run.crumble[key] = (run.crumble[key] || 0) + 1;
+    if (run.crumble[key] >= CRUMBLE_T) {
+      const r = Math.floor(key / run.cols), c = key % run.cols;
+      run.grid[r][c] = '.';
+      delete run.crumble[key];
+      burst(c * TILE + 6, r * TILE + 2, 10, ['#7a5590', '#4a2f5a', '#2a1838'], 1.2);
+      SFX.crumble();
+    }
+  }
+}
+
+// ---------- Enemies and hazards ----------
+function updateEnemies() {
+  for (const e of enemies) {
+    if (e.type === 's') {
+      e.anim++;
+      const cc = Math.floor((e.x + e.w / 2) / TILE), feet = e.y + e.h;
+      if (!(feet % TILE === 0 && isSupportCh(tileAt(cc, feet / TILE)))) {
+        // Lost its footing (a ledge crumbled): fall until it lands on the next ledge or floor.
+        const boundary = (Math.floor(feet / TILE) + 1) * TILE;
+        if (feet + 2 >= boundary && isSupportCh(tileAt(cc, boundary / TILE))) e.y = boundary - e.h;
+        else e.y += 2;
+        continue;
+      }
+      const nx = e.x + e.vx;
+      const front = e.vx > 0 ? nx + e.w : nx;
+      const fc = Math.floor(front / TILE), r = Math.floor((e.y + e.h - 1) / TILE);
+      const ahead = tileAt(fc, r), below = tileAt(fc, r + 1);
+      if (isSolidCh(ahead) || ahead === '^' || !isSupportCh(below)) e.vx = -e.vx; else e.x = nx;
+    } else {
+      e.t++;
+      const nx = e.x + e.vx;
+      const front = e.vx > 0 ? nx + e.w : nx;
+      const fc = Math.floor(front / TILE), r = Math.floor((e.y0 + 3) / TILE);
+      if (isSolidCh(tileAt(fc, r))) e.vx = -e.vx; else e.x = nx;
+      e.y = e.y0 + Math.sin(e.t * 0.09) * 4;
+    }
+  }
+  enemies = enemies.filter(e => e.y < run.rows * TILE + 20);
+}
+function updateStalactites() {
+  const pcx = player.x + P_W / 2;
+  for (const s of stals) {
+    if (s.state === 'hang') {
+      if (Math.abs(pcx - (s.x + 4)) < 12 && player.y > s.y) { s.state = 'shake'; s.timer = 20; SFX.shake(); }
+    } else if (s.state === 'shake') {
+      if (--s.timer <= 0) s.state = 'fall';
+    } else if (s.state === 'fall') {
+      s.vy = Math.min(s.vy + 0.3, 7);
+      s.y += s.vy;
+      const r = Math.floor((s.y + s.h) / TILE), c = Math.floor((s.x + 4) / TILE);
+      if (r >= run.rows || isSupportCh(tileAt(c, r))) {
+        s.state = 'gone';
+        if (r < run.rows) s.y = r * TILE - s.h;
+        burst(s.x + 4, s.y + s.h, 14, ['#6a5ac8', '#3a2f80', '#a090ff'], 1.6);
+        SFX.crash();
+      }
+    }
+  }
+}
+function checkHazards() {
+  const p = player;
+  if (p.y > run.rows * TILE) { die('You fell into the dark.'); return; }
+  const hit = { x: p.x + 1, y: p.y + 2, w: P_W - 2, h: P_H - 3 };
+  // Spikes
+  const c0 = Math.floor(hit.x / TILE), c1 = Math.floor((hit.x + hit.w) / TILE);
+  const r0 = Math.floor(hit.y / TILE), r1 = Math.floor((p.y + P_H - 1) / TILE);
+  for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
+    if (tileAt(c, r) === '^' && p.y + P_H > r * TILE + 6) { die('Spiked!'); return; }
+  }
+  for (const e of enemies) {
+    if (overlap(hit, { x: e.x + 1, y: e.y + 1, w: e.w - 2, h: e.h - 1 })) { die(e.type === 's' ? 'Slimed!' : 'Bitten by a bat!'); return; }
+  }
+  for (const s of stals) {
+    if (s.state !== 'gone' && overlap(hit, { x: s.x + 1, y: s.y, w: 6, h: s.h - 2 })) { die('Hit by a stalactite!'); return; }
+  }
+}
+function checkPickups() {
+  const p = { x: player.x, y: player.y, w: P_W, h: P_H };
+  for (const s of run.sparkles) {
+    if (!s.taken && overlap(p, { x: s.c * TILE + 2, y: s.r * TILE + 2, w: 8, h: 8 })) {
+      s.taken = true; score += 100;
+      burst(s.c * TILE + 6, s.r * TILE + 6, 12, ['#ffe94a', '#fff6b0'], 1.5);
+      SFX.sparkle();
+      if (!run.open && run.sparkles.every(q => q.taken)) { run.open = true; SFX.open(); }
+    }
+  }
+  for (const o of run.oils) {
+    if (!o.taken && overlap(p, { x: o.c * TILE + 2, y: o.r * TILE + 2, w: 8, h: 10 })) {
+      o.taken = true; score += 50; oil = Math.min(100, oil + 40);
+      burst(o.c * TILE + 6, o.r * TILE + 6, 10, ['#ff9a3a', '#ffd090'], 1.2);
+      SFX.oil();
+    }
+  }
+  if (run.open && overlap(p, { x: run.exit.c * TILE + 2, y: (run.exit.r - 1) * TILE + 4, w: 8, h: 20 })) levelClear();
+}
+
+function updateParticles() {
+  for (const q of particles) { q.x += q.vx; q.y += q.vy; q.vy += 0.12; q.life--; }
+  particles = particles.filter(q => q.life > 0);
+}
+
+// ---------- Update ----------
+function update() {
+  frame++;
+  if (cheatFlash > 0) cheatFlash--;
+  if (pressed.KeyM && state !== 'editor') { muted = !muted; store(MUTE_KEY, muted ? '1' : '0'); }
+  switch (state) {
+    case 'title': updateTitle(); break;
+    case 'play': updatePlay(); break;
+    case 'dying': updateDying(); break;
+    case 'clear': updateClear(); break;
+    case 'gameover': case 'win': updateEnd(); break;
+    case 'editor': updateEditor(); break;
+  }
+}
+function updateTitle() {
+  if (confirmPressed()) { startGame(0); return; }
+  if (cheat) {
+    if (pressed.KeyL) { openEditor(0); return; }
+    for (let d = 1; d <= 9; d++) {
+      if (pressed['Digit' + d] && d <= levels.length) { startGame(d - 1); return; }
+    }
+  }
+}
+function updatePlay() {
+  if (pressed.Escape) { if (testMode) backToEditor('Test play stopped.'); else state = 'title'; return; }
+  if (pressed.KeyP) paused = !paused;
+  if (paused) return;
+  if (cheat && !testMode && pressed.KeyK) { nextLevel(); return; }
+  if (banner > 0) banner--;
+  updatePlayer();
+  updateCrumbles();
+  updateEnemies();
+  updateStalactites();
+  updateParticles();
+  checkPickups();
+  if (state !== 'play') return;
+  checkHazards();
+  if (state !== 'play') return;
+  if (!cheat) {
+    oil -= 100 / (run.def.oil * 60);
+    if (oil < 20 && frame % 60 === 0) SFX.lowOil();
+    if (oil <= 0) { oil = 0; die('Your lamp burned out.'); }
+  }
+}
+function updateDying() {
+  if (pressed.Escape) { if (testMode) backToEditor('Test play stopped.'); else state = 'title'; return; }
+  updateEnemies();
+  updateParticles();
+  if (--stateTimer > 0) return;
+  if (lives <= 0) { endRun('gameover'); return; }
+  resetActors();
+  state = 'play';
+}
+function updateClear() {
+  updateParticles();
+  stateTimer++;
+  // Remaining lamp oil drains into the score, then the next cavern starts.
+  if (oil > 0) {
+    const d = Math.min(1, oil);
+    oil -= d; score += Math.round(d * 5);
+    if (stateTimer % 4 === 0) SFX.tick();
+    run.drainedAt = stateTimer;
+  } else if (stateTimer - (run.drainedAt || 0) > 90 || (stateTimer > 30 && confirmPressed())) {
+    nextLevel();
+  }
+}
+function updateEnd() {
+  stateTimer++;
+  if (stateTimer > 45 && (confirmPressed() || pressed.Escape)) state = 'title';
+}
+
+// ---------- Rendering: play ----------
+function lightRadius() { return 30 + 80 * (oil / 100) + Math.sin(frame * 0.3) * 1.2; }
+const dark = document.createElement('canvas');
+dark.width = VW; dark.height = PLAY_H;
+const dctx = dark.getContext('2d');
+function punchLight(x, y, r, strength) {
+  const g = dctx.createRadialGradient(x, y, r * 0.15, x, y, r);
+  g.addColorStop(0, `rgba(0,0,0,${strength})`);
+  g.addColorStop(0.6, `rgba(0,0,0,${strength * 0.8})`);
+  g.addColorStop(1, 'rgba(0,0,0,0)');
+  dctx.fillStyle = g;
+  dctx.fillRect(x - r, y - r, r * 2, r * 2);
+}
+// The camera follows the miner and stops at the cavern's edges. With a screen-sized cavern it stays at 0,0.
+const cam = { x: 0, y: 0 };
+function updateCamera() {
+  const maxX = Math.max(0, run.cols * TILE - VW), maxY = Math.max(0, run.rows * TILE - PLAY_H);
+  cam.x = Math.round(clamp(player.x + P_W / 2 - VW / 2, 0, maxX));
+  cam.y = Math.round(clamp(player.y + P_H / 2 - PLAY_H / 2, 0, maxY));
+}
+function worldView(fn) {
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, 0, VW, PLAY_H); ctx.clip();
+  ctx.translate(-cam.x, -cam.y);
+  fn();
+  ctx.restore();
+}
+function drawDarkness() {
+  dctx.globalCompositeOperation = 'source-over';
+  dctx.clearRect(0, 0, VW, PLAY_H);
+  dctx.fillStyle = 'rgba(2,2,12,0.9)';
+  dctx.fillRect(0, 0, VW, PLAY_H);
+  dctx.globalCompositeOperation = 'destination-out';
+  dctx.save();
+  dctx.translate(-cam.x, -cam.y);
+  if (state !== 'dying') {
+    const lx = player.x + (player.face > 0 ? P_W : 0), ly = player.y + 3;
+    punchLight(lx, ly, lightRadius(), 1);
+  } else {
+    punchLight(player.x + P_W / 2, player.y + P_H / 2, 40 * (stateTimer / 70), 1);
+  }
+  for (const s of run.sparkles) if (!s.taken) punchLight(s.c * TILE + 6, s.r * TILE + 6, 14, 0.5);
+  if (run.open) punchLight(run.exit.c * TILE + 6, run.exit.r * TILE, 30, 0.8);
+  dctx.restore();
+  dctx.globalCompositeOperation = 'source-over';
+  ctx.drawImage(dark, 0, 0);
+}
+function drawWorld() {
+  ctx.imageSmoothingEnabled = false;
+  updateCamera();
+  worldView(drawWorldBase);
+  drawDarkness();
+  worldView(drawWorldGlow);
+}
+function drawWorldBase() {
+  ctx.drawImage(run.staticCanvas, 0, 0);
+  for (let r = 0; r < run.rows; r++) for (let c = 0; c < run.cols; c++) {
+    if (run.grid[r][c] === '~') drawCrumble(ctx, c * TILE, r * TILE, (run.crumble[r * run.cols + c] || 0) / CRUMBLE_T);
+  }
+  for (const o of run.oils) if (!o.taken) drawOil(ctx, o.c * TILE + 2, o.r * TILE + 2);
+  for (const s of stals) {
+    if (s.state === 'gone') continue;
+    const j = s.state === 'shake' ? (frame % 4 < 2 ? -1 : 1) : 0;
+    drawStalactite(ctx, s.x + j, s.y);
+  }
+  drawExit(ctx, run.exit.c * TILE, (run.exit.r - 1) * TILE, run.open, frame);
+  for (const e of enemies) {
+    if (e.type === 's') drawSprite(ctx, Math.floor(e.anim / 16) % 2 ? SLIME_B : SLIME_A, SCOL, Math.round(e.x), Math.round(e.y), e.vx < 0);
+    else drawSprite(ctx, Math.floor(e.t / 8) % 2 ? BAT_B : BAT_A, BCOL, Math.round(e.x), Math.round(e.y), false);
+  }
+  if (state === 'play' || state === 'clear') {
+    const p = player;
+    const legs = !p.onGround || Math.floor(p.anim / 6) % 2 ? PLAYER_B : PLAYER_A;
+    drawSprite(ctx, legs, PCOL, Math.round(p.x) - 1, Math.round(p.y), p.face < 0);
+  }
+  for (const q of particles) px(ctx, q.col, Math.round(q.x), Math.round(q.y), 1, 1);
+}
+function drawWorldGlow() {
+  // Things that glow are drawn over the darkness so you can always find them.
+  for (const s of run.sparkles) if (!s.taken) drawSparkle(ctx, s.c * TILE + 6, s.r * TILE + 6, frame + s.c * 7);
+  if (run.open) drawExit(ctx, run.exit.c * TILE, (run.exit.r - 1) * TILE, true, frame);
+  for (const o of run.oils) if (!o.taken && Math.floor((frame + o.c * 13) / 20) % 3 === 0) px(ctx, '#ffd090', o.c * TILE + 4, o.r * TILE + 6, 1, 1);
+  for (const e of enemies) {
+    if (e.type === 'b') px(ctx, '#ff4a5a', Math.round(e.x) + 4, Math.round(e.y) + 2, 2, 1);
+    else {
+      ctx.globalAlpha = 0.5;
+      const ey = Math.round(e.y) + (Math.floor(e.anim / 16) % 2 ? 3 : 2);
+      px(ctx, '#ffffff', Math.round(e.x) + (Math.floor(e.anim / 16) % 2 ? 1 : 2), ey, 1, 1);
+      px(ctx, '#ffffff', Math.round(e.x) + (Math.floor(e.anim / 16) % 2 ? 7 : 6), ey, 1, 1);
+      ctx.globalAlpha = 1;
+    }
+  }
+}
+function drawHud() {
+  px(ctx, '#05051a', 0, PLAY_H, VW, HUD_H);
+  px(ctx, '#2a3a7a', 0, PLAY_H, VW, 1);
+  const name = testMode ? 'TEST: ' + run.def.name : `CAVERN ${levelIdx + 1}: ${run.def.name}`;
+  text(name.toUpperCase(), 4, PLAY_H + 3, { size: 7, color: '#bcd0ff' });
+  text(`SCORE ${pad(score)}  HI ${pad(Math.max(hi, runCheated || testMode ? 0 : score))}`, VW - 4, PLAY_H + 3, { size: 7, align: 'right' });
+  const taken = run.sparkles.filter(s => s.taken).length;
+  drawSparkle(ctx, 8, PLAY_H + 17, 0);
+  text(`${taken}/${run.sparkles.length}`, 15, PLAY_H + 13, { size: 7, color: '#ffe94a' });
+  text('LAMP', 48, PLAY_H + 13, { size: 7, color: '#ff9a3a' });
+  px(ctx, '#1a1a3a', 70, PLAY_H + 14, 102, 7);
+  const oc = oil < 20 ? (frame % 30 < 15 ? '#ff4a5a' : '#802030') : oil < 45 ? '#ff9a3a' : '#ffd060';
+  px(ctx, oc, 71, PLAY_H + 15, Math.round(oil), 5);
+  if (testMode) text('ESC: BACK TO EDITOR', VW - 4, PLAY_H + 13, { size: 7, align: 'right', color: '#8ff0ff' });
+  else {
+    if (cheat) text('CHEAT  K: SKIP', VW - 4, PLAY_H + 13, { size: 7, align: 'right', color: '#ff5a6a' });
+    else for (let i = 0; i < lives; i++) {
+      const x = VW - 10 - i * 10;
+      px(ctx, '#f2c230', x, PLAY_H + 15, 6, 3); px(ctx, '#f2c230', x - 1, PLAY_H + 18, 8, 1); px(ctx, '#fff6a0', x + 5, PLAY_H + 16, 1, 1);
+    }
+    if (!cheat) text('LIVES', VW - 14 - lives * 10, PLAY_H + 13, { size: 7, align: 'right', color: '#8890c0' });
+  }
+}
+function drawPlay() {
+  drawWorld();
+  drawHud();
+  if (banner > 0 && state === 'play') {
+    ctx.globalAlpha = Math.min(1, banner / 40);
+    px(ctx, 'rgba(0,0,0,0.6)', 0, 70, VW, 40);
+    text(testMode ? 'TEST PLAY' : `CAVERN ${levelIdx + 1}`, VW / 2, 74, { size: 9, align: 'center', color: '#bcd0ff' });
+    text(run.def.name.toUpperCase(), VW / 2, 87, { size: 14, align: 'center', color: '#ffe94a' });
+    ctx.globalAlpha = 1;
+  }
+  if (state === 'dying' && deathReason) text(deathReason.toUpperCase(), VW / 2, 84, { size: 12, align: 'center', color: '#ff5a6a' });
+  if (state === 'clear') {
+    px(ctx, 'rgba(0,0,0,0.6)', 0, 66, VW, 48);
+    text('CAVERN CLEARED!', VW / 2, 72, { size: 14, align: 'center', color: '#8ff0ff' });
+    text('LAMP OIL BONUS', VW / 2, 92, { size: 8, align: 'center', color: '#ff9a3a' });
+  }
+  if (paused) {
+    px(ctx, 'rgba(0,0,0,0.6)', 0, 0, VW, PLAY_H);
+    text('PAUSED', VW / 2, 80, { size: 16, align: 'center', color: '#ffe94a' });
+    text('P to carry on   ESC to quit', VW / 2, 102, { size: 8, align: 'center', bold: false });
+  }
+}
+
+// ---------- Rendering: screens ----------
+const titleImg = new Image();
+titleImg.src = 'title.jpg';
+function drawBackdrop(dim) {
+  if (titleImg.complete && titleImg.naturalWidth) {
+    const s = Math.max(VW / titleImg.naturalWidth, VH / titleImg.naturalHeight);
+    const w = titleImg.naturalWidth * s, h = titleImg.naturalHeight * s;
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(titleImg, (VW - w) / 2, (VH - h) / 2, w, h);
+    ctx.imageSmoothingEnabled = false;
+  } else {
+    const g = ctx.createLinearGradient(0, 0, 0, VH);
+    g.addColorStop(0, '#000'); g.addColorStop(1, '#1a1550');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, VW, VH);
+  }
+  px(ctx, `rgba(3,3,16,${dim})`, 0, 0, VW, VH);
+}
+function drawTitle() {
+  drawBackdrop(0.35);
+  text('CAVERN MINER', VW / 2, 14, { size: 30, align: 'center', color: '#ffe94a' });
+  text('Collect every sparkle, then reach the exit before your lamp burns out.', VW / 2, 50, { size: 7, align: 'center', bold: false });
+  px(ctx, 'rgba(5,5,26,0.82)', 104, 64, 176, 76);
+  px(ctx, '#2a3a7a', 104, 64, 176, 1); px(ctx, '#2a3a7a', 104, 139, 176, 1);
+  text('CONTROLS', VW / 2, 68, { size: 8, align: 'center', color: '#8ff0ff' });
+  const rows = [['Move', '← →  or  A D'], ['Jump', 'Space, ↑ or W'], ['Pause', 'P'], ['Sound on/off', 'M'], ['Quit to title', 'Esc']];
+  rows.forEach(([a, b], i) => {
+    text(a, 116, 82 + i * 11, { size: 8, color: '#bcd0ff', bold: false });
+    text(b, 268, 82 + i * 11, { size: 8, align: 'right' });
+  });
+  text(`HIGH SCORE  ${pad(hi)}`, VW / 2, 148, { size: 10, align: 'center', color: '#ffe94a' });
+  if (Math.floor(frame / 30) % 2 === 0) text('PRESS ENTER OR SPACE TO START', VW / 2, 166, { size: 9, align: 'center' });
+  if (cheat) {
+    text('CHEAT MODE ON: no lives or oil lost, scores not saved', VW / 2, 184, { size: 7, align: 'center', color: '#ff5a6a' });
+    text(`L: level editor    1-${Math.min(9, levels.length)}: start at cavern    K in game: skip cavern`, VW / 2, 194, { size: 7, align: 'center', color: '#ff9aa4' });
+  } else if (cheatFlash > 0) {
+    text('CHEAT MODE OFF', VW / 2, 188, { size: 8, align: 'center', color: '#8890c0' });
+  }
+  if (customLevels) text('Playing your edited caverns', VW / 2, 205, { size: 7, align: 'center', color: '#8890c0', bold: false });
+  if (muted) text('SOUND OFF', VW - 4, 4, { size: 7, align: 'right', color: '#8890c0' });
+}
+function drawEnd() {
+  drawBackdrop(0.7);
+  const win = state === 'win';
+  text(win ? 'YOU MADE IT OUT!' : 'GAME OVER', VW / 2, 50, { size: 24, align: 'center', color: win ? '#8ff0ff' : '#ff5a6a' });
+  if (win) text('Every cavern cleared.', VW / 2, 80, { size: 8, align: 'center', bold: false });
+  text(`SCORE  ${pad(score)}`, VW / 2, 100, { size: 12, align: 'center', color: '#ffe94a' });
+  if (newHi) text('NEW HIGH SCORE!', VW / 2, 118, { size: 10, align: 'center', color: '#8ff0ff' });
+  else if (runCheated) text('Cheat mode was on, so the score is not saved.', VW / 2, 118, { size: 7, align: 'center', color: '#ff9aa4', bold: false });
+  else text(`HIGH SCORE  ${pad(hi)}`, VW / 2, 118, { size: 9, align: 'center' });
+  if (stateTimer > 45 && Math.floor(frame / 30) % 2 === 0) text('PRESS ENTER TO CONTINUE', VW / 2, 150, { size: 9, align: 'center' });
+}
+
+// ---------- Level editor ----------
+const PALETTE = [
+  { ch: '#', key: 'Digit1', label: '1', name: 'Rock' },
+  { ch: 'B', key: 'Digit2', label: '2', name: 'Brick' },
+  { ch: '-', key: 'Digit3', label: '3', name: 'Ledge' },
+  { ch: '~', key: 'Digit4', label: '4', name: 'Crumbling ledge' },
+  { ch: '^', key: 'Digit5', label: '5', name: 'Spikes' },
+  { ch: 'v', key: 'Digit6', label: '6', name: 'Stalactite' },
+  { ch: '*', key: 'Digit7', label: '7', name: 'Sparkle' },
+  { ch: 'o', key: 'Digit8', label: '8', name: 'Oil flask' },
+  { ch: 's', key: 'Digit9', label: '9', name: 'Slime' },
+  { ch: 'b', key: 'Digit0', label: '0', name: 'Bat' },
+  { ch: 'P', key: 'KeyP', label: 'P', name: 'Start' },
+  { ch: 'E', key: 'KeyE', label: 'E', name: 'Exit' },
+  { ch: '.', key: 'Period', label: '.', name: 'Eraser' },
+];
+const PAL_X = 3, PAL_W = 15;
+const ed = { idx: 0, grid: null, name: '', oil: 90, tile: '#', dirty: false, msg: '', msgT: 0, help: false,
+             hover: null, painting: 0, staticCanvas: null };
+
+function openEditor(idx) {
+  state = 'editor';
+  ed.idx = clamp(idx, 0, levels.length - 1);
+  loadEdCavern();
+  edMsg('Level editor. Press H for help.');
+}
+function loadEdCavern() {
+  const l = levels[ed.idx];
+  ed.grid = l.map.map(r => r.split(''));
+  ed.name = l.name; ed.oil = l.oil; ed.dirty = false; ed.staticCanvas = null;
+}
+function edDef() { return { name: ed.name, oil: ed.oil, map: ed.grid.map(r => r.join('')) }; }
+function edMsg(m) { ed.msg = m; ed.msgT = 240; }
+function edSet(c, r, ch) {
+  if (c < 0 || c >= COLS || r < 0 || r >= ROWS || ed.grid[r][c] === ch) return;
+  if (ch === 'P' || ch === 'E') {
+    for (const row of ed.grid) for (let i = 0; i < COLS; i++) if (row[i] === ch) row[i] = '.';
+  }
+  ed.grid[r][c] = ch;
+  ed.dirty = true; ed.staticCanvas = null;
+}
+function edConfirmDiscard() { return !ed.dirty || window.confirm('Discard your unsaved changes to this cavern?'); }
+function afterDialog() { keys = {}; pressed = {}; }
+function backToEditor(msg) {
+  testMode = false; state = 'editor'; paused = false;
+  edMsg(msg);
+}
+function levelText(l) {
+  return '{"name":' + JSON.stringify(l.name) + ',"oil":' + l.oil + ',"map":[\n' + l.map.map(r => JSON.stringify(r)).join(',\n') + '\n]}';
+}
+function copyText(t, what) {
+  const fallback = () => { window.prompt('Copy this text:', t); afterDialog(); };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(t).then(() => edMsg(what + ' copied to the clipboard.'), fallback);
+  } else fallback();
+}
+function importText() {
+  const t = window.prompt('Paste a cavern, or a full set of caverns:');
+  afterDialog();
+  if (!t) return;
+  let data;
+  try { data = JSON.parse(t); } catch (e) { edMsg('That text could not be read.'); return; }
+  if (Array.isArray(data)) {
+    const bad = data.map(validateLevel).find(Boolean);
+    if (!data.length || bad) { edMsg('Not imported: ' + (bad || 'the set is empty.')); return; }
+    if (!window.confirm(`Replace all your caverns with these ${data.length}?`)) { afterDialog(); return; }
+    afterDialog();
+    levels = data.map(cleanLevel); saveLevels();
+    ed.idx = 0; loadEdCavern(); edMsg(`Imported ${levels.length} caverns.`);
+  } else {
+    const bad = validateLevel(data);
+    if (bad) { edMsg('Not imported: ' + bad); return; }
+    const l = cleanLevel(data);
+    ed.grid = l.map.map(r => r.split('')); ed.name = l.name; ed.oil = l.oil;
+    ed.dirty = true; ed.staticCanvas = null;
+    edMsg('Imported. Press S to save it.');
+  }
+}
+function blankCavern() {
+  const map = [];
+  for (let r = 0; r < ROWS; r++) {
+    if (r === 0 || r === ROWS - 1) map.push('#'.repeat(COLS));
+    else if (r === ROWS - 2) map.push('#P' + '.'.repeat(COLS - 6) + '*E.#');
+    else map.push('#' + '.'.repeat(COLS - 2) + '#');
+  }
+  return { name: 'New cavern', oil: 90, map };
+}
+
+function updateEditor() {
+  if (ed.msgT > 0) ed.msgT--;
+  const sh = keys.Shift;
+  for (const p of PALETTE) if (pressed[p.key]) { ed.tile = p.ch; SFX.click(); }
+  if (pressed.Backspace) ed.tile = '.';
+  if (pressed.KeyH) ed.help = !ed.help;
+  if (pressed.Escape) {
+    if (ed.help) { ed.help = false; return; }
+    if (edConfirmDiscard()) { afterDialog(); state = 'title'; } else afterDialog();
+    return;
+  }
+  if (pressed.KeyT) {
+    const def = edDef(), bad = validateLevel(def);
+    if (bad) { edMsg('Cannot test: ' + bad); return; }
+    testDef = cleanLevel(def); testMode = true; score = 0; lives = START_LIVES; runCheated = true;
+    startLevel(ed.idx);
+    return;
+  }
+  if (pressed.KeyS) {
+    const def = edDef(), bad = validateLevel(def);
+    if (bad) { edMsg('Not saved: ' + bad); return; }
+    levels[ed.idx] = cleanLevel(def);
+    ed.dirty = false;
+    edMsg(saveLevels() ? `Saved cavern ${ed.idx + 1}.` : 'Could not save: this browser is blocking storage.');
+  }
+  if (pressed.BracketLeft || pressed.BracketRight) {
+    const n = clamp(ed.idx + (pressed.BracketRight ? 1 : -1), 0, levels.length - 1);
+    if (n !== ed.idx) {
+      if (edConfirmDiscard()) { ed.idx = n; loadEdCavern(); edMsg(`Cavern ${n + 1} of ${levels.length}.`); }
+      afterDialog();
+    }
+  }
+  if (pressed.KeyN) {
+    const n = window.prompt('Cavern name:', ed.name);
+    afterDialog();
+    if (n && n.trim()) { ed.name = n.trim().slice(0, 24); ed.dirty = true; }
+  }
+  if (pressed.KeyO) {
+    const n = window.prompt('Seconds of lamp oil for this cavern (20 to 300):', String(ed.oil));
+    afterDialog();
+    const v = parseInt(n, 10);
+    if (v) { ed.oil = clamp(v, 20, 300); ed.dirty = true; }
+  }
+  if (pressed.KeyA) {
+    if (edConfirmDiscard()) {
+      levels.splice(ed.idx + 1, 0, blankCavern());
+      saveLevels();
+      ed.idx++; loadEdCavern();
+      edMsg(`Added cavern ${ed.idx + 1}.`);
+    }
+    afterDialog();
+  }
+  if (pressed.KeyD && sh) {
+    if (levels.length < 2) edMsg('You need at least one cavern.');
+    else if (window.confirm(`Delete cavern ${ed.idx + 1}, "${levels[ed.idx].name}"?`)) {
+      levels.splice(ed.idx, 1); saveLevels();
+      ed.idx = Math.min(ed.idx, levels.length - 1); loadEdCavern();
+      edMsg('Cavern deleted.');
+    }
+    afterDialog();
+  }
+  if (pressed.KeyR) {
+    if (sh) {
+      if (window.confirm('Put back all the original caverns? Every edit you have saved will be lost.')) {
+        store(LEVELS_KEY, null); levels = loadLevels(); ed.idx = 0; loadEdCavern();
+        edMsg('Original caverns restored.');
+      }
+    } else if (edConfirmDiscard()) { loadEdCavern(); edMsg('Changes undone.'); }
+    afterDialog();
+  }
+  if (pressed.KeyC) {
+    if (sh) copyText('[\n' + levels.map(levelText).join(',\n') + '\n]', 'All saved caverns');
+    else copyText(levelText(edDef()), 'This cavern');
+  }
+  if (pressed.KeyI) importText();
+}
+
+function mousePos(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: (e.clientX - r.left) / r.width * VW, y: (e.clientY - r.top) / r.height * VH };
+}
+function paintAt(x, y) {
+  if (y < 0 || y >= PLAY_H || x < 0 || x >= VW) return;
+  edSet(Math.floor(x / TILE), Math.floor(y / TILE), ed.painting === 2 ? '.' : ed.tile);
+}
+canvas.addEventListener('mousedown', e => {
+  ensureAudio();
+  if (state !== 'editor') return;
+  e.preventDefault();
+  const m = mousePos(e);
+  if (m.y >= PLAY_H) {
+    const i = Math.floor((m.x - PAL_X) / PAL_W);
+    if (i >= 0 && i < PALETTE.length) { ed.tile = PALETTE[i].ch; SFX.click(); }
+    return;
+  }
+  ed.painting = e.button === 2 ? 2 : 1;
+  paintAt(m.x, m.y);
+});
+canvas.addEventListener('mousemove', e => {
+  if (state !== 'editor') return;
+  const m = mousePos(e);
+  ed.hover = m.y < PLAY_H ? { c: Math.floor(m.x / TILE), r: Math.floor(m.y / TILE) } : null;
+  if (ed.painting) paintAt(m.x, m.y);
+});
+canvas.addEventListener('mouseleave', () => { ed.hover = null; });
+window.addEventListener('mouseup', () => { ed.painting = 0; });
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+function drawTileIcon(ch, x, y, t) {
+  switch (ch) {
+    case '#': drawRock(ctx, x, y, 3, 3, () => '.'); break;
+    case 'B': drawBrick(ctx, x, y, 3, 3, () => '.'); break;
+    case '-': drawLedge(ctx, x, y + 3, 1, 1); break;
+    case '~': drawCrumble(ctx, x, y + 3, 0); break;
+    case '^': drawSpikes(ctx, x, y); break;
+    case 'v': drawStalactite(ctx, x + 2, y); break;
+    case '*': drawSparkle(ctx, x + 6, y + 6, t); break;
+    case 'o': drawOil(ctx, x + 2, y + 1); break;
+    case 's': drawSprite(ctx, SLIME_A, SCOL, x + 1, y + 5, false); break;
+    case 'b': drawSprite(ctx, BAT_A, BCOL, x + 1, y + 3, false); break;
+    case 'P': drawSprite(ctx, PLAYER_A, PCOL, x + 1, y - 6, false); break;
+    case 'E':
+      ctx.save(); ctx.translate(x + 3, y); ctx.scale(0.5, 0.5); drawExit(ctx, 0, 0, true, t); ctx.restore(); break;
+    case '.':
+      px(ctx, '#ff5a6a', x + 2, y + 5, 8, 2); px(ctx, '#ffffff', x + 2, y + 5, 3, 2); break;
+  }
+}
+function drawEditor() {
+  if (!ed.staticCanvas) ed.staticCanvas = renderStatic(ed.grid);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(ed.staticCanvas, 0, 0);
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    const ch = ed.grid[r][c], x = c * TILE, y = r * TILE;
+    if (ch === '~') drawCrumble(ctx, x, y, 0);
+    else if (ch === 'v') drawStalactite(ctx, x + 2, y);
+    else if (ch === '*') drawSparkle(ctx, x + 6, y + 6, frame + c * 7);
+    else if (ch === 'o') drawOil(ctx, x + 2, y + 2);
+    else if (ch === 's') drawSprite(ctx, SLIME_A, SCOL, x + 1, y + 5, false);
+    else if (ch === 'b') drawSprite(ctx, BAT_A, BCOL, x + 1, y + 3, false);
+    else if (ch === 'P') drawSprite(ctx, PLAYER_A, PCOL, x + 2, y - 6, false);
+    else if (ch === 'E') drawExit(ctx, x, y - 12, true, frame);
+  }
+  ctx.fillStyle = 'rgba(255,255,255,0.05)';
+  for (let c = 1; c < COLS; c++) ctx.fillRect(c * TILE, 0, 0.25, PLAY_H);
+  for (let r = 1; r < ROWS; r++) ctx.fillRect(0, r * TILE, VW, 0.25);
+  if (ed.hover) {
+    ctx.strokeStyle = '#ffe94a'; ctx.lineWidth = 0.5;
+    ctx.strokeRect(ed.hover.c * TILE + 0.25, ed.hover.r * TILE + 0.25, TILE - 0.5, TILE - 0.5);
+  }
+  // Panel
+  px(ctx, '#05051a', 0, PLAY_H, VW, HUD_H);
+  px(ctx, '#2a3a7a', 0, PLAY_H, VW, 1);
+  PALETTE.forEach((p, i) => {
+    const x = PAL_X + i * PAL_W, y = PLAY_H + 2;
+    px(ctx, p.ch === ed.tile ? '#ffe94a' : '#1a1a3a', x, y, 14, 14);
+    px(ctx, '#07061a', x + 1, y + 1, 12, 12);
+    ctx.save(); ctx.beginPath(); ctx.rect(x + 1, y + 1, 12, 12); ctx.clip();
+    drawTileIcon(p.ch, x + 1, y + 1, frame);
+    ctx.restore();
+    text(p.label, x + 7, y + 15, { size: 5, align: 'center', color: '#8890c0', shadow: false });
+  });
+  const sel = PALETTE.find(p => p.ch === ed.tile);
+  const info = `CAVERN ${ed.idx + 1}/${levels.length}${ed.dirty ? ' *' : ''}`;
+  text(info, VW - 4, PLAY_H + 3, { size: 7, align: 'right', color: ed.dirty ? '#ff9a3a' : '#bcd0ff' });
+  text(ed.name.slice(0, 16), VW - 4, PLAY_H + 13, { size: 6, align: 'right', color: '#e8ecff', bold: false });
+  text(sel ? sel.name.toUpperCase() : '', 202, PLAY_H + 3, { size: 6, color: '#ffe94a' });
+  text(`OIL ${ed.oil}s  H: HELP`, 202, PLAY_H + 13, { size: 6, color: '#8890c0' });
+  if (ed.msgT > 0 && !ed.help) {
+    ctx.globalAlpha = Math.min(1, ed.msgT / 30);
+    px(ctx, 'rgba(0,0,0,0.75)', 0, PLAY_H - 14, VW, 13);
+    text(ed.msg, VW / 2, PLAY_H - 12, { size: 7, align: 'center', color: '#8ff0ff' });
+    ctx.globalAlpha = 1;
+  }
+  if (ed.help) {
+    px(ctx, 'rgba(3,3,16,0.92)', 24, 8, VW - 48, PLAY_H - 16);
+    text('LEVEL EDITOR', VW / 2, 14, { size: 10, align: 'center', color: '#ffe94a' });
+    const lines = [
+      ['Left click / drag', 'Paint the selected tile'],
+      ['Right click / drag', 'Erase'],
+      ['1-0, P, E, .', 'Pick a tile (or click the palette)'],
+      ['T', 'Test play this cavern (Esc to come back)'],
+      ['S', 'Save this cavern'],
+      ['[  ]', 'Previous / next cavern'],
+      ['N  /  O', 'Rename  /  set lamp oil seconds'],
+      ['A  /  Shift+D', 'Add a new cavern  /  delete this one'],
+      ['R  /  Shift+R', 'Undo changes  /  restore original caverns'],
+      ['C  /  Shift+C', 'Copy this cavern  /  copy all caverns'],
+      ['I', 'Import a cavern or a set of caverns'],
+      ['Esc', 'Back to the welcome screen'],
+    ];
+    lines.forEach(([k, d], i) => {
+      text(k, 40, 32 + i * 11, { size: 7, color: '#8ff0ff' });
+      text(d, 150, 32 + i * 11, { size: 7, bold: false });
+    });
+    text('Each cavern needs one start, one exit and at least one sparkle.', VW / 2, 166, { size: 7, align: 'center', color: '#ff9a3a', bold: false });
+    text('Saved caverns live in this browser and replace the built-in ones.', VW / 2, 175, { size: 7, align: 'center', color: '#8890c0', bold: false });
+  }
+}
+
+// ---------- Main loop ----------
+function draw() {
+  ctx.setTransform(SCALE, 0, 0, SCALE, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  px(ctx, '#000', 0, 0, VW, VH);
+  switch (state) {
+    case 'title': drawTitle(); break;
+    case 'play': case 'dying': case 'clear': drawPlay(); break;
+    case 'gameover': case 'win': drawEnd(); break;
+    case 'editor': drawEditor(); break;
+  }
+}
+const STEP = 1 / 60;
+let last = performance.now(), acc = 0;
+function loop(now) {
+  requestAnimationFrame(loop); // schedule first so an error can't freeze the game
+  acc += Math.min(0.1, (now - last) / 1000);
+  last = now;
+  while (acc >= STEP) { update(); pressed = {}; acc -= STEP; }
+  draw();
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
