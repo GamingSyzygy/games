@@ -7,7 +7,7 @@
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
   body { display: flex; align-items: center; justify-content: center; }
-  canvas { display: block; background: #05050f; image-rendering: pixelated; image-rendering: crisp-edges; }
+  canvas { display: block; background: #05050f; }
 </style>
 </head>
 <body>
@@ -31,7 +31,7 @@ let SCALE = 1;
 function fitCanvas() {
   const css = Math.min(window.innerWidth / VW, window.innerHeight / VH);
   const dpr = window.devicePixelRatio || 1;
-  SCALE = Math.max(1, Math.min(8, Math.ceil(css * dpr)));
+  SCALE = Math.max(2, Math.min(8, 2 * Math.ceil(css * dpr / 2))); // even, so each art pixel is whole screen pixels
   canvas.width = VW * SCALE;
   canvas.height = VH * SCALE;
   canvas.style.width = Math.floor(VW * css) + 'px';
@@ -281,128 +281,253 @@ function text(s, x, y, { size = 8, color = '#e8ecff', align = 'left', bold = tru
   ctx.fillStyle = color;
   ctx.fillText(s, x, y);
 }
-function drawSprite(g, map, cols, x, y, flip) {
-  const w = map[0].length;
-  for (let r = 0; r < map.length; r++) {
-    const row = map[r];
-    for (let i = 0; i < w; i++) {
-      const ch = row[i];
-      if (ch === '.') continue;
-      g.fillStyle = cols[ch];
-      g.fillRect(x + (flip ? w - 1 - i : i), y + r, 1, 1);
-    }
-  }
-}
+
+// ---------- Art (2x detail) ----------
+// All art is drawn in "art pixels": ART art pixels per game pixel, so a tile is AT art pixels square.
+// Gameplay, physics and level files still use game pixels and the 12-pixel tile grid.
+const ART = 2, AT = TILE * ART;
+function artView(fn) { ctx.save(); ctx.scale(1 / ART, 1 / ART); fn(); ctx.restore(); }
 
 // Palette taken from the cavern artwork: deep navy, purple rock, blue brick, moss green, sparkle yellow.
-const MOSS = '#8db32a', MOSS_DARK = '#5d7a1a';
+const ROCK = ['#0d0a22', '#191338', '#251d55', '#30267a', '#4134a0', '#5a4bc4'];
+const RIM = ['#24488f', '#3f7fd0', '#6aaaf0', '#a6d4ff'];
+const BRK = ['#0a1a3e', '#1a4590', '#2a68c0', '#3b80d8', '#5c9ff0', '#8cc4ff'];
+const MOSS = ['#34480f', '#56721a', '#86ac28', '#b4d64a'];
 
-function drawMossTop(g, x, y, c, r) {
-  if (hash(c, r, 7) < 0.5) {
-    const mx = Math.floor(hash(c, r, 8) * 6);
-    px(g, MOSS, x + mx, y - 1, 5, 2);
-    px(g, MOSS_DARK, x + mx + 1, y + 1, 3, 1);
-  }
+function shade(hex, amt) {
+  const n = parseInt(hex.slice(1), 16);
+  let r = n >> 16, g = (n >> 8) & 255, b = n & 255;
+  if (amt >= 0) { r += (255 - r) * amt; g += (255 - g) * amt; b += (255 - b) * amt; }
+  else { r *= 1 + amt; g *= 1 + amt; b *= 1 + amt; }
+  return '#' + ((1 << 24) | (Math.round(r) << 16) | (Math.round(g) << 8) | Math.round(b)).toString(16).slice(1);
 }
-function drawRock(g, x, y, c, r, nb) {
-  px(g, '#2a2160', x, y, 12, 12);
-  for (let i = 0; i < 5; i++) {
-    const hx = Math.floor(hash(c, r, i) * 10), hy = Math.floor(hash(r, c, i + 9) * 10);
-    px(g, i % 2 ? '#3a2f80' : '#1d1748', x + hx, y + hy, 2, 2);
-  }
-  const up = !isSolidCh(nb(0, -1)), dn = !isSolidCh(nb(0, 1)), lf = !isSolidCh(nb(-1, 0)), rt = !isSolidCh(nb(1, 0));
-  if (lf) px(g, '#3a3190', x, y, 1, 12);
-  if (rt) px(g, '#15113a', x + 11, y, 1, 12);
-  if (dn) px(g, '#15113a', x, y + 10, 12, 2);
-  if (up) { px(g, '#4f86d8', x, y, 12, 2); px(g, '#3a5fb0', x, y + 2, 12, 1); drawMossTop(g, x, y, c, r); }
-  if (dn && hash(c, r, 11) < 0.4) {
-    const mx = 1 + Math.floor(hash(c, r, 12) * 9), len = 2 + Math.floor(hash(c, r, 13) * 6);
-    px(g, MOSS_DARK, x + mx, y + 12, 1, len);
-    px(g, MOSS, x + mx, y + 12, 1, Math.max(1, len - 2));
-  }
-}
-function drawBrick(g, x, y, c, r, nb) {
-  px(g, '#0f2654', x, y, 12, 12);
-  for (let i = 0; i < 4; i++) {
-    const off = ((r * 4 + i) & 1) ? 3 : 0;
-    for (let bx = -off; bx < 12; bx += 6) {
-      const x0 = Math.max(bx, 0), x1 = Math.min(bx + 5, 12);
-      if (x1 <= x0) continue;
-      px(g, hash(c * 7 + bx, r * 4 + i) < 0.3 ? '#2458a8' : '#2c6ec9', x + x0, y + i * 3, x1 - x0, 2);
-      px(g, '#4f94e6', x + x0, y + i * 3, x1 - x0, 1);
+
+function mossTufts(g, x, y, c, r, chance) {
+  const n = hash(c, r, 31) < chance ? 1 + Math.floor(hash(c, r, 32) * 2) : 0;
+  for (let i = 0; i < n; i++) {
+    const tx = x + Math.floor(hash(c, r, 33 + i) * 16), tw = 4 + Math.floor(hash(c, r, 35 + i) * 7);
+    for (let k = 0; k < tw; k++) {
+      const h = 1 + Math.floor(hash(c * 31 + k, r, 37 + i) * 3);
+      px(g, MOSS[1], tx + k, y - h + 1, 1, h + 1);
+      px(g, MOSS[2], tx + k, y - h + 1, 1, h);
+      if (hash(c * 17 + k, r, 39) < 0.4) px(g, MOSS[3], tx + k, y - h + 1, 1, 1);
     }
   }
-  if (!isSolidCh(nb(0, -1))) { px(g, '#6aaaf0', x, y, 12, 1); drawMossTop(g, x, y, c, r); }
+}
+function mossVines(g, x, y, c, r, chance) {
+  if (hash(c, r, 41) >= chance) return;
+  const n = 1 + Math.floor(hash(c, r, 42) * 2);
+  for (let i = 0; i < n; i++) {
+    const vx = x + 2 + Math.floor(hash(c, r, 43 + i) * 20), len = 4 + Math.floor(hash(c, r, 45 + i) * 12);
+    for (let k = 0; k < len; k++) {
+      const wob = Math.round(Math.sin((k + i * 3) * 0.7) * 0.6);
+      px(g, k % 3 === 0 ? MOSS[1] : MOSS[2], vx + wob, y + k, 1, 1);
+      if (k % 4 === 2) px(g, MOSS[3], vx + wob + (k % 8 === 2 ? 1 : -1), y + k, 1, 1);
+    }
+  }
+}
+
+// Rock is drawn as overlapping, shaded boulders clipped to the rock mass, like the cavern artwork.
+function drawRockMass(g, grid, rows, cols) {
+  const isRock = (cc, rr) => cc >= 0 && cc < cols && rr >= 0 && rr < rows && grid[rr][cc] === '#';
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) if (isRock(c, r)) px(g, ROCK[2], c * AT, r * AT, AT, AT);
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+    if (!isRock(c, r)) continue;
+    for (let i = 0; i < 3; i++) {
+      const cx = c * AT + Math.floor(hash(c, r, i * 3) * AT), cy = r * AT + Math.floor(hash(c, r, i * 3 + 1) * AT);
+      const rad = 5 + Math.floor(hash(c, r, i * 3 + 2) * 6);
+      for (let yy = -rad; yy <= rad; yy++) for (let xx = -rad; xx <= rad; xx++) {
+        const d = Math.sqrt(xx * xx + yy * yy);
+        if (d > rad + 0.3) continue;
+        const X = cx + xx, Y = cy + yy;
+        if (!isRock(Math.floor(X / AT), Math.floor(Y / AT))) continue;
+        let s;
+        if (d > rad - 0.9) s = (xx + yy < 0) ? 1 : 0;
+        else {
+          const l = (-xx - yy * 1.3) / rad;
+          s = l > 0.9 ? 5 : l > 0.35 ? 4 : l > -0.4 ? 3 : 2;
+        }
+        px(g, ROCK[s], X, Y, 1, 1);
+      }
+    }
+  }
+  // Exposed edges: a lit blue rim on top with moss, shadow and hanging vines underneath.
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+    if (!isRock(c, r)) continue;
+    const x = c * AT, y = r * AT;
+    const up = !isSolidCh(r > 0 ? grid[r - 1][c] : '#'), dn = !isSolidCh(r < rows - 1 ? grid[r + 1][c] : '#');
+    const lf = !isSolidCh(c > 0 ? grid[r][c - 1] : '#'), rt = !isSolidCh(c < cols - 1 ? grid[r][c + 1] : '#');
+    if (lf) for (let k = 0; k < AT; k++) px(g, hash(c, r * 24 + k, 51) < 0.5 ? ROCK[4] : ROCK[3], x, y + k, 1, 1);
+    if (rt) for (let k = 0; k < AT; k++) px(g, ROCK[1], x + AT - 1, y + k, 1, 1);
+    if (dn) for (let k = 0; k < AT; k++) {
+      const h = 2 + Math.floor(hash(c * 24 + k, r, 52) * 2);
+      px(g, ROCK[1], x + k, y + AT - h, 1, h);
+      px(g, ROCK[0], x + k, y + AT - 1, 1, 1);
+    }
+    if (up) {
+      for (let k = 0; k < AT; k++) {
+        const t = 2 + (hash(c * 24 + k, r, 53) < 0.35 ? 1 : 0);
+        px(g, RIM[1], x + k, y, 1, t);
+        px(g, RIM[0], x + k, y + t, 1, 1);
+        if (hash(c * 24 + k, r, 54) < 0.3) px(g, RIM[2], x + k, y, 1, 1);
+      }
+    }
+  }
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+    if (!isRock(c, r)) continue;
+    const up = !isSolidCh(r > 0 ? grid[r - 1][c] : '#'), dn = r < rows - 1 && !isSolidCh(grid[r + 1][c]);
+    if (up) mossTufts(g, c * AT, r * AT, c, r, 0.55);
+    if (dn) mossVines(g, c * AT, (r + 1) * AT, c, r, 0.35);
+  }
+}
+
+function drawBrick(g, x, y, c, r, nb) {
+  px(g, BRK[0], x, y, AT, AT);
+  for (let i = 0; i < 4; i++) {
+    const off = ((r * 4 + i) & 1) ? 6 : 0;
+    for (let bx = -off; bx < AT; bx += 12) {
+      const x0 = Math.max(bx, 0), x1 = Math.min(bx + 11, AT);
+      if (x1 <= x0) continue;
+      const v = hash(c * 7 + bx, r * 4 + i, 3);
+      const b = v < 0.25 ? -1 : v > 0.85 ? 1 : 0;
+      const yy = y + i * 6;
+      px(g, BRK[2 + b], x + x0, yy, x1 - x0, 5);
+      px(g, BRK[3 + b], x + x0, yy, x1 - x0, 1);
+      px(g, BRK[1 + b], x + x0, yy + 4, x1 - x0, 1);
+      if (bx >= 0) px(g, BRK[4 + b], x + x0, yy, 1, 1);
+      if (bx + 11 <= AT) px(g, BRK[1 + b], x1 - 1, yy + 1, 1, 4);
+      for (let k = 0; k < 3; k++) {
+        const dx = x0 + Math.floor(hash(c, r * 13 + i, bx + k) * (x1 - x0)), dy = 1 + Math.floor(hash(r, c * 7 + i, bx + k) * 3);
+        px(g, k === 0 ? BRK[3 + b] : BRK[1 + b], x + dx, yy + dy, 1, 1);
+      }
+    }
+  }
+  if (!isSolidCh(nb(0, -1))) {
+    px(g, BRK[5], x, y, AT, 1);
+    mossTufts(g, x, y, c, r, 0.4);
+  }
 }
 function drawLedge(g, x, y, c, r) {
-  px(g, '#1d3c7a', x, y, 12, 5);
-  px(g, '#3c74c8', x, y, 12, 4);
-  px(g, '#7ab0f0', x, y, 12, 1);
-  px(g, '#1d3c7a', x + 2 + Math.floor(hash(c, r, 2) * 8), y + 1, 1, 3);
-  if (hash(c, r, 3) < 0.4) px(g, MOSS, x + Math.floor(hash(c, r, 4) * 8), y - 1, 4, 1);
+  const rows = ['#b4dcff', '#74ace8', '#5590dc', '#4a82cf', '#3f76c4', '#3a6dbb', '#305fa8', '#264f92', '#1b3a72', '#112650'];
+  rows.forEach((col, i) => px(g, col, x, y + i, AT, 1));
+  const seam = 4 + Math.floor(hash(c, r, 2) * 16);
+  px(g, '#1b3a72', x + seam, y + 1, 1, 8);
+  px(g, '#74ace8', x + seam + 1, y + 1, 1, 7);
+  for (let k = 0; k < 4; k++) px(g, '#305fa8', x + Math.floor(hash(c, r, 60 + k) * AT), y + 3 + Math.floor(hash(r, c, 60 + k) * 4), 1, 1);
+  mossTufts(g, x, y, c, r, 0.45);
+  mossVines(g, x, y + 10, c, r + 100, 0.15);
 }
 function drawCrumble(g, x, y, stage) {
-  const j = stage > 0 ? Math.round((Math.random() - 0.5) * 3 * stage) : 0;
-  y += j;
-  px(g, '#4a2f5a', x, y, 12, 5);
-  px(g, '#7a5590', x, y, 12, 1);
-  px(g, '#2a1838', x + 3, y + 1, 1, 4);
-  px(g, '#2a1838', x + 8, y + 2, 1, 3);
-  px(g, '#2a1838', x + 5, y + 3, 2, 1);
-  if (stage > 0.5) { px(g, '#05050f', x + 3, y, 1, 5); px(g, '#05050f', x + 8, y + 1, 1, 4); }
+  const rows = ['#c09ad8', '#9a74b6', '#7a5898', '#6e4c8c', '#634282', '#573876', '#4a2f68', '#3c2556', '#2c1a42', '#1c0f2c'];
+  rows.forEach((col, i) => px(g, col, x, y + i, AT, 1));
+  const crack = (cx, wide) => {
+    const path = [0, 1, 1, 0, -1, -1, 0, 1, 0, 0];
+    path.forEach((o, i) => { px(g, '#140a20', x + cx + o, y + i, wide, 1); px(g, '#b08ac8', x + cx + o + wide, y + i, 1, 1); });
+  };
+  crack(6, stage > 0.4 ? 2 : 1);
+  crack(16, stage > 0.4 ? 2 : 1);
+  if (stage > 0.7) { px(g, '#05050f', x + 10, y, 3, 4); px(g, '#05050f', x + 20, y + 5, 3, 5); }
 }
 function drawSpikes(g, x, y) {
-  const widths = [4, 4, 3, 3, 2, 2, 1];
-  for (let k = 0; k < 3; k++) {
-    const bx = x + k * 4;
-    for (let h = 0; h < widths.length; h++) {
-      const w = widths[h], ox = bx + Math.floor((4 - w) / 2), yy = y + 11 - h;
-      px(g, '#d8f2ff', ox, yy, Math.ceil(w / 2), 1);
-      if (w > 1) px(g, '#6aa8e0', ox + Math.ceil(w / 2), yy, Math.floor(w / 2), 1);
+  const shards = [[1, 6, 13], [6, 7, 19], [12, 6, 15], [17, 7, 18]];
+  for (const [sx, w, h] of shards) {
+    for (let i = 0; i < h; i++) {
+      const ww = Math.max(1, Math.round(w * (1 - i / h))), ox = x + sx + Math.floor((w - ww) / 2), yy = y + AT - 1 - i;
+      const half = Math.ceil(ww / 2);
+      px(g, i > h * 0.6 ? '#e8f8ff' : '#bfe8ff', ox, yy, half, 1);
+      if (ww > 1) px(g, i > h * 0.6 ? '#7ab8ec' : '#4f8fd0', ox + half, yy, ww - half, 1);
+      if (ww > 2) px(g, '#2a5aa0', ox + ww - 1, yy, 1, 1);
+    }
+    px(g, '#ffffff', x + sx + Math.floor(w / 2), y + AT - h, 1, 1);
+  }
+  px(g, '#1d3c7a', x, y + AT - 1, AT, 1);
+}
+function drawStalactite(g, x, y) {
+  for (let i = 0; i < 24; i++) {
+    const w = Math.max(1, Math.round(16 * Math.pow(1 - i / 24, 0.8)));
+    const ox = x + Math.floor((16 - w) / 2);
+    px(g, '#3a2f80', ox, y + i, w, 1);
+    px(g, '#7a6ad8', ox, y + i, Math.max(1, Math.floor(w / 4)), 1);
+    if (w > 3) px(g, '#251d55', ox + w - 2, y + i, 2, 1);
+  }
+  px(g, '#251d55', x, y, 16, 2);
+  px(g, '#a898ff', x + 7, y + 22, 1, 2);
+}
+function drawSparkle(g, cx, cy, t) {
+  const a = 6 + (Math.floor(t / 10) % 4 === 0 ? 2 : 0);
+  for (let k = 2; k <= a; k++) {
+    const col = k > a - 2 ? '#b89418' : '#ffe94a';
+    px(g, col, cx, cy - k, 1, 1); px(g, col, cx, cy + k, 1, 1);
+    px(g, col, cx - k, cy, 1, 1); px(g, col, cx + k, cy, 1, 1);
+  }
+  px(g, '#fff6b0', cx - 1, cy - 1, 3, 3);
+  px(g, '#ffffff', cx, cy, 1, 1);
+  const d = Math.floor(t / 10) % 2 ? '#fff6b0' : '#ffe94a';
+  px(g, d, cx - 2, cy - 2, 1, 1); px(g, d, cx + 2, cy - 2, 1, 1);
+  px(g, d, cx - 2, cy + 2, 1, 1); px(g, d, cx + 2, cy + 2, 1, 1);
+}
+function drawOil(g, x, y) {
+  px(g, '#7a4a20', x + 6, y, 4, 3);
+  px(g, '#a8703a', x + 6, y, 2, 1);
+  px(g, '#8890b0', x + 6, y + 3, 4, 3);
+  px(g, '#c8d0e8', x + 6, y + 3, 1, 3);
+  const widths = [8, 12, 14, 14, 14, 14, 14, 14, 14, 12, 12, 10, 8, 6];
+  widths.forEach((w, i) => {
+    const ox = x + Math.floor((16 - w) / 2), yy = y + 6 + i;
+    px(g, '#4a2408', ox, yy, w, 1);
+    if (w > 2) px(g, i < 4 ? '#a04e14' : '#ff9a3a', ox + 1, yy, w - 2, 1);
+    if (i >= 4 && w > 4) px(g, '#d06a1a', ox + w - 3, yy, 2, 1);
+  });
+  px(g, '#ffe0b0', x + 3, y + 9, 1, 6);
+  px(g, '#ffd090', x + 4, y + 8, 1, 2);
+}
+function drawExit(g, x, y, open, t) {
+  // Stone archway 24x48 art pixels, opening downwards onto the exit tile.
+  px(g, '#0a1430', x + 4, y + 6, 16, 42);
+  for (let i = 0; i < 6; i++) {
+    const yy = y + 8 + i * 7;
+    for (const sx of [0, 20]) {
+      px(g, '#2c5cac', sx === 0 ? x : x + sx, yy, 4, 6);
+      px(g, '#6aa4ec', sx === 0 ? x : x + sx, yy, 4, 1);
+      px(g, '#1b3a72', sx === 0 ? x : x + sx, yy + 5, 4, 1);
+    }
+  }
+  const archW = [12, 16, 20, 22, 24, 24, 24, 24];
+  archW.forEach((w, i) => {
+    const ox = x + Math.floor((24 - w) / 2);
+    px(g, '#2c5cac', ox, y + i, w, 1);
+    if (i < 2) px(g, '#8cc4ff', ox, y + i, w, 1);
+  });
+  px(g, '#4f88d8', x + 10, y, 4, 7);
+  px(g, '#b4dcff', x + 10, y, 4, 1);
+  const inner = [8, 12, 14, 16];
+  if (open) {
+    const cols = ['#e8fdff', '#a8f4ff', '#5ad8ff', '#2a9ad0', '#1a6aa8'];
+    for (let i = 0; i < 40; i++) {
+      const w = i < inner.length ? inner[i] : 16, ox = x + Math.floor((24 - w) / 2);
+      px(g, cols[(Math.floor(i / 4) + Math.floor(t / 4)) % cols.length], ox, y + 8 + i, w, 1);
+    }
+    for (let k = 0; k < 6; k++) {
+      const sy = y + 8 + ((t * 0.7 + k * 7) % 40), sx = x + 5 + ((k * 5 + Math.floor(t / 9)) % 14);
+      px(g, '#ffffff', sx, sy, 1, 1);
+    }
+  } else {
+    for (let i = 0; i < 40; i++) {
+      const w = i < inner.length ? inner[i] : 16, ox = x + Math.floor((24 - w) / 2);
+      px(g, i % 2 ? '#05050f' : '#070818', ox, y + 8 + i, w, 1);
     }
   }
 }
-function drawStalactite(g, x, y) {
-  const widths = [8, 8, 7, 6, 6, 5, 4, 4, 3, 2, 2, 1];
-  for (let i = 0; i < widths.length; i++) {
-    const w = widths[i], ox = x + Math.floor((8 - w) / 2);
-    px(g, '#3a2f80', ox, y + i, w, 1);
-    px(g, '#6a5ac8', ox, y + i, 1, 1);
-  }
-}
-function drawSparkle(g, cx, cy, t) {
-  const a = 3 + (Math.floor(t / 12) % 3 === 0 ? 1 : 0);
-  px(g, '#ffe94a', cx, cy - a, 1, a * 2 + 1);
-  px(g, '#ffe94a', cx - a, cy, a * 2 + 1, 1);
-  px(g, '#fff6b0', cx - 1, cy - 1, 3, 3);
-  px(g, '#ffffff', cx, cy, 1, 1);
-}
-function drawOil(g, x, y) {
-  px(g, '#a0a8c0', x + 3, y, 2, 3);
-  px(g, '#c86a1a', x + 1, y + 3, 6, 7);
-  px(g, '#ff9a3a', x + 2, y + 4, 4, 5);
-  px(g, '#ffd090', x + 2, y + 4, 1, 3);
-}
-function drawExit(g, x, y, open, t) {
-  px(g, '#1a2a5a', x, y + 2, 12, 22);
-  px(g, '#3c74c8', x + 2, y, 8, 2);
-  px(g, '#3c74c8', x, y + 2, 2, 22);
-  px(g, '#3c74c8', x + 10, y + 2, 2, 22);
-  px(g, '#7ab0f0', x + 2, y, 8, 1);
-  if (open) {
-    const cols = ['#e0fbff', '#8ff0ff', '#4fd1ff', '#2a8ac0'];
-    for (let i = 0; i < 21; i++) px(g, cols[(Math.floor(i / 3) + Math.floor(t / 5)) % 4], x + 2, y + 3 + i, 8, 1);
-  } else {
-    px(g, '#05050f', x + 2, y + 3, 8, 21);
-  }
-}
 
+// Sprites are designed small, then enlarged with Scale2x (which smooths diagonals),
+// shaded top-lit and given a dark outline. Each frame is drawn once and cached.
 const PLAYER_A = [
   '...yyyy...', '..yyyyyyl.', '..yyyyyyll', '.yyyyyyyy.', '...sssks..', '...sssss..',
   '....sss...', '..cccccc..', '.cccccccc.', '.cCccccCs.', '.sCccccC..', '..cccccc..',
   '..kkkkkk..', '..pppppp..', '..pp..pp..', '..pp..pp..', '..bb..bb..', '.bbb..bbb.',
 ];
 const PLAYER_B = PLAYER_A.slice(0, 13).concat(['..pppppp..', '..ppp.pp..', '.pp....pp.', '.bb....bb.', 'bbb....bbb']);
+const PLAYER_J = PLAYER_A.slice(0, 13).concat(['..pppppp..', '.ppp..ppp.', '.bb....bb.', 'bb......bb', '..........']);
 const PCOL = { y: '#f2c230', l: '#fff6a0', s: '#f0b890', k: '#1a1030', c: '#3aa6a0', C: '#237570', b: '#6a4a2a', p: '#4a3a8a' };
 const SLIME_A = ['...gggg...', '..gggggg..', '.gwkggwkg.', '.gggggggg.', 'gggggggggg', 'gGggGgggGg', 'GGGGGGGGGG'];
 const SLIME_B = ['..........', '...gggg...', '.gggggggg.', 'gwkggggwkg', 'gggggggggg', 'gGggGgggGg', 'GGGGGGGGGG'];
@@ -411,22 +536,65 @@ const BAT_A = ['m........m', 'mm..MM..mm', '.mmMrrMmm.', '..mMMMMm..', '...M..M.
 const BAT_B = ['..........', '....MM....', '...MrrM...', '.mmMMMMmm.', 'mm.M..M.mm', 'm........m'];
 const BCOL = { m: '#7a5ab8', M: '#3a2a6a', r: '#ff4a5a' };
 
-// Draws the unchanging parts of a cavern (background and fixed tiles) once, into its own canvas.
+function scale2x(map) {
+  const h = map.length, w = map[0].length;
+  const at = (x, y) => (x < 0 || y < 0 || x >= w || y >= h ? '.' : map[y][x]);
+  const out = Array.from({ length: h * 2 }, () => Array(w * 2).fill('.'));
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const P = at(x, y), A = at(x, y - 1), B = at(x + 1, y), C = at(x - 1, y), D = at(x, y + 1);
+    out[y * 2][x * 2] = C === A && C !== D && A !== B ? A : P;
+    out[y * 2][x * 2 + 1] = A === B && A !== C && B !== D ? B : P;
+    out[y * 2 + 1][x * 2] = D === C && D !== B && C !== A ? C : P;
+    out[y * 2 + 1][x * 2 + 1] = B === D && B !== A && D !== C ? D : P;
+  }
+  return out;
+}
+const spriteCache = new Map();
+function sprite(map, cols, flip) {
+  const key = map.join('|') + (flip ? 'F' : '');
+  let cv = spriteCache.get(key);
+  if (cv) return cv;
+  const big = scale2x(map), h = big.length, w = big[0].length;
+  const at = (x, y) => (x < 0 || y < 0 || x >= w || y >= h ? '.' : big[y][x]);
+  cv = document.createElement('canvas');
+  cv.width = w + 2; cv.height = h + 2;
+  const g = cv.getContext('2d');
+  for (let y = -1; y <= h; y++) for (let x = -1; x <= w; x++) {
+    const ch = at(x, y), dx = (flip ? w - 1 - x : x) + 1;
+    if (ch === '.') {
+      if (at(x - 1, y) !== '.' || at(x + 1, y) !== '.' || at(x, y - 1) !== '.' || at(x, y + 1) !== '.') px(g, '#0a0716', dx, y + 1, 1, 1);
+      continue;
+    }
+    let col = cols[ch];
+    if (at(x, y - 1) !== ch && at(x, y - 1) === '.') col = shade(col, 0.3);
+    else if (at(x, y + 1) === '.' || at(x + (flip ? -1 : 1), y) === '.') col = shade(col, -0.28);
+    px(g, col, dx, y + 1, 1, 1);
+  }
+  spriteCache.set(key, cv);
+  return cv;
+}
+// Draws a sprite with its top-left at (x, y) in art pixels (the outline sits one pixel outside).
+function drawSpriteArt(map, cols, x, y, flip) { ctx.drawImage(sprite(map, cols, flip), x - 1, y - 1); }
+
+// Draws the unchanging parts of a cavern (background and fixed tiles) once, into its own canvas
+// at art resolution. It is drawn back at game size.
 function renderStatic(grid) {
-  const rows = grid.length, cols = grid[0].length, W = cols * TILE, H = rows * TILE;
+  const rows = grid.length, cols = grid[0].length, W = cols * AT, H = rows * AT;
   const cv = document.createElement('canvas');
   cv.width = W; cv.height = H;
   const g = cv.getContext('2d');
-  px(g, '#07061a', 0, 0, W, H);
-  for (let y = 0; y < H; y += 6) {
-    const off = (y / 6) % 2 ? 6 : 0;
-    for (let x = -off; x < W; x += 12) {
-      px(g, '#0c0f2e', x + 1, y + 1, 10, 4);
-      px(g, '#111642', x + 1, y + 1, 10, 1);
+  px(g, '#06051a', 0, 0, W, H);
+  for (let y = 0, row = 0; y < H; y += 12, row++) {
+    const off = row % 2 ? 12 : 0;
+    for (let x = -off; x < W; x += 24) {
+      const v = hash(x, y, 71);
+      px(g, v < 0.2 ? '#0a0c28' : '#0d1134', x + 1, y + 1, 22, 10);
+      px(g, '#141a4a', x + 1, y + 1, 22, 1);
+      px(g, '#090a22', x + 1, y + 10, 22, 1);
     }
   }
   for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
-    if (hash(c, r, 21) < 0.3) { g.fillStyle = 'rgba(5,4,16,0.6)'; g.fillRect(c * TILE, r * TILE, TILE, TILE); }
+    if (hash(c, r, 21) < 0.3) { g.fillStyle = 'rgba(5,4,16,0.55)'; g.fillRect(c * AT, r * AT, AT, AT); }
   }
   const nbAt = (c, r) => (dc, dr) => {
     const cc = c + dc, rr = r + dr;
@@ -434,18 +602,20 @@ function renderStatic(grid) {
     return grid[rr][cc];
   };
   for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
-    const ch = grid[r][c], x = c * TILE, y = r * TILE;
-    if (ch === '#') drawRock(g, x, y, c, r, nbAt(c, r));
-    else if (ch === 'B') drawBrick(g, x, y, c, r, nbAt(c, r));
+    if (grid[r][c] === 'B') drawBrick(g, c * AT, r * AT, c, r, nbAt(c, r));
   }
+  drawRockMass(g, grid, rows, cols);
   // Ledges and spikes go on top so moss from the rock above doesn't cover them.
   for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
-    const ch = grid[r][c], x = c * TILE, y = r * TILE;
-    if (ch === '-') drawLedge(g, x, y, c, r);
-    else if (ch === '^') drawSpikes(g, x, y);
+    const ch = grid[r][c];
+    if (ch === '-') drawLedge(g, c * AT, r * AT, c, r);
+    else if (ch === '^') drawSpikes(g, c * AT, r * AT);
   }
   return cv;
 }
+const iconCache = {};
+// Icons are rendered with open space above so rock and brick show their lit, mossy top edge.
+function tileIcon(ch) { return iconCache[ch] || (iconCache[ch] = renderStatic([['.'], [ch]])); }
 
 // ---------- Game state ----------
 const P_W = 8, P_H = 18;
@@ -845,45 +1015,52 @@ function drawWorld() {
   worldView(drawWorldGlow);
 }
 function drawWorldBase() {
-  ctx.drawImage(run.staticCanvas, 0, 0);
-  for (let r = 0; r < run.rows; r++) for (let c = 0; c < run.cols; c++) {
-    if (run.grid[r][c] === '~') drawCrumble(ctx, c * TILE, r * TILE, (run.crumble[r * run.cols + c] || 0) / CRUMBLE_T);
-  }
-  for (const o of run.oils) if (!o.taken) drawOil(ctx, o.c * TILE + 2, o.r * TILE + 2);
-  for (const s of stals) {
-    if (s.state === 'gone') continue;
-    const j = s.state === 'shake' ? (frame % 4 < 2 ? -1 : 1) : 0;
-    drawStalactite(ctx, snap(s.x + j), snap(lerpY(s)));
-  }
-  drawExit(ctx, run.exit.c * TILE, (run.exit.r - 1) * TILE, run.open, frame);
-  for (const e of enemies) {
-    const ex = snap(lerpX(e)), ey = snap(lerpY(e));
-    if (e.type === 's') drawSprite(ctx, Math.floor(e.anim / 16) % 2 ? SLIME_B : SLIME_A, SCOL, ex, ey, e.vx < 0);
-    else drawSprite(ctx, Math.floor(e.t / 8) % 2 ? BAT_B : BAT_A, BCOL, ex, ey, false);
-  }
-  if (state === 'play' || state === 'clear') {
-    const p = player;
-    const legs = !p.onGround || Math.floor(p.anim / 6) % 2 ? PLAYER_B : PLAYER_A;
-    drawSprite(ctx, legs, PCOL, snap(lerpX(p)) - 1, snap(lerpY(p)), p.face < 0);
-  }
-  for (const q of particles) px(ctx, q.col, snap(q.x), snap(q.y), 1, 1);
+  ctx.drawImage(run.staticCanvas, 0, 0, run.cols * TILE, run.rows * TILE);
+  artView(() => {
+    for (let r = 0; r < run.rows; r++) for (let c = 0; c < run.cols; c++) {
+      if (run.grid[r][c] !== '~') continue;
+      const stage = (run.crumble[r * run.cols + c] || 0) / CRUMBLE_T;
+      const j = stage > 0 ? Math.round((Math.random() - 0.5) * 4 * stage) : 0;
+      drawCrumble(ctx, c * AT, r * AT + j, stage);
+    }
+    for (const o of run.oils) if (!o.taken) drawOil(ctx, (o.c * TILE + 2) * ART, (o.r * TILE + 2) * ART);
+    for (const s of stals) {
+      if (s.state === 'gone') continue;
+      const j = s.state === 'shake' ? (frame % 4 < 2 ? -1 : 1) : 0;
+      drawStalactite(ctx, snap(s.x + j) * ART, snap(lerpY(s)) * ART);
+    }
+    drawExit(ctx, run.exit.c * AT, (run.exit.r - 1) * AT, run.open, frame);
+    for (const e of enemies) {
+      const ex = snap(lerpX(e)) * ART, ey = snap(lerpY(e)) * ART;
+      if (e.type === 's') drawSpriteArt(Math.floor(e.anim / 16) % 2 ? SLIME_B : SLIME_A, SCOL, ex, ey, e.vx < 0);
+      else drawSpriteArt(Math.floor(e.t / 8) % 2 ? BAT_B : BAT_A, BCOL, ex, ey, false);
+    }
+    if (state === 'play' || state === 'clear') {
+      const p = player;
+      const frameMap = !p.onGround ? PLAYER_J : Math.floor(p.anim / 6) % 2 ? PLAYER_B : PLAYER_A;
+      drawSpriteArt(frameMap, PCOL, (snap(lerpX(p)) - 1) * ART, snap(lerpY(p)) * ART, p.face < 0);
+    }
+    for (const q of particles) px(ctx, q.col, snap(q.x) * ART, snap(q.y) * ART, 2, 2);
+  });
 }
 function drawWorldGlow() {
   // Things that glow are drawn over the darkness so you can always find them.
-  for (const s of run.sparkles) if (!s.taken) drawSparkle(ctx, s.c * TILE + 6, s.r * TILE + 6, frame + s.c * 7);
-  if (run.open) drawExit(ctx, run.exit.c * TILE, (run.exit.r - 1) * TILE, true, frame);
-  for (const o of run.oils) if (!o.taken && Math.floor((frame + o.c * 13) / 20) % 3 === 0) px(ctx, '#ffd090', o.c * TILE + 4, o.r * TILE + 6, 1, 1);
-  for (const e of enemies) {
-    const ex = snap(lerpX(e)), eyy = snap(lerpY(e));
-    if (e.type === 'b') px(ctx, '#ff4a5a', ex + 4, eyy + 2, 2, 1);
-    else {
-      ctx.globalAlpha = 0.5;
-      const ey = eyy + (Math.floor(e.anim / 16) % 2 ? 3 : 2);
-      px(ctx, '#ffffff', ex + (Math.floor(e.anim / 16) % 2 ? 1 : 2), ey, 1, 1);
-      px(ctx, '#ffffff', ex + (Math.floor(e.anim / 16) % 2 ? 7 : 6), ey, 1, 1);
-      ctx.globalAlpha = 1;
+  artView(() => {
+    for (const s of run.sparkles) if (!s.taken) drawSparkle(ctx, (s.c * TILE + 6) * ART, (s.r * TILE + 6) * ART, frame + s.c * 7);
+    if (run.open) drawExit(ctx, run.exit.c * AT, (run.exit.r - 1) * AT, true, frame);
+    for (const o of run.oils) if (!o.taken && Math.floor((frame + o.c * 13) / 20) % 3 === 0) px(ctx, '#ffe0b0', (o.c * TILE + 2) * ART + 3, (o.r * TILE + 2) * ART + 10, 1, 3);
+    for (const e of enemies) {
+      const ex = snap(lerpX(e)) * ART, ey = snap(lerpY(e)) * ART;
+      if (e.type === 'b') px(ctx, '#ff4a5a', ex + 8, ey + 4, 4, 2);
+      else {
+        ctx.globalAlpha = 0.5;
+        const b = Math.floor(e.anim / 16) % 2;
+        px(ctx, '#ffffff', ex + (b ? 2 : 4), ey + (b ? 6 : 4), 2, 2);
+        px(ctx, '#ffffff', ex + (b ? 14 : 12), ey + (b ? 6 : 4), 2, 2);
+        ctx.globalAlpha = 1;
+      }
     }
-  }
+  });
 }
 function drawHud() {
   px(ctx, '#05051a', 0, PLAY_H, VW, HUD_H);
@@ -892,7 +1069,7 @@ function drawHud() {
   text(name.toUpperCase(), 4, PLAY_H + 3, { size: 7, color: '#bcd0ff' });
   text(`SCORE ${pad(score)}  HI ${pad(Math.max(hi, runCheated || testMode ? 0 : score))}`, VW - 4, PLAY_H + 3, { size: 7, align: 'right' });
   const taken = run.sparkles.filter(s => s.taken).length;
-  drawSparkle(ctx, 8, PLAY_H + 17, 0);
+  artView(() => drawSparkle(ctx, 8 * ART, (PLAY_H + 17) * ART, 0));
   text(`${taken}/${run.sparkles.length}`, 15, PLAY_H + 13, { size: 7, color: '#ffe94a' });
   text('LAMP', 48, PLAY_H + 13, { size: 7, color: '#ff9a3a' });
   px(ctx, '#1a1a3a', 70, PLAY_H + 14, 102, 7);
@@ -1179,40 +1356,34 @@ canvas.addEventListener('mouseleave', () => { ed.hover = null; });
 window.addEventListener('mouseup', () => { ed.painting = 0; });
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 
-function drawTileIcon(ch, x, y, t) {
+// Draws an entity or a tile that isn't in the static layer, with (x, y) the cell's top-left in game pixels.
+function drawCellArt(ch, x, y, t) {
+  const X = x * ART, Y = y * ART;
   switch (ch) {
-    case '#': drawRock(ctx, x, y, 3, 3, () => '.'); break;
-    case 'B': drawBrick(ctx, x, y, 3, 3, () => '.'); break;
-    case '-': drawLedge(ctx, x, y + 3, 1, 1); break;
-    case '~': drawCrumble(ctx, x, y + 3, 0); break;
-    case '^': drawSpikes(ctx, x, y); break;
-    case 'v': drawStalactite(ctx, x + 2, y); break;
-    case '*': drawSparkle(ctx, x + 6, y + 6, t); break;
-    case 'o': drawOil(ctx, x + 2, y + 1); break;
-    case 's': drawSprite(ctx, SLIME_A, SCOL, x + 1, y + 5, false); break;
-    case 'b': drawSprite(ctx, BAT_A, BCOL, x + 1, y + 3, false); break;
-    case 'P': drawSprite(ctx, PLAYER_A, PCOL, x + 1, y - 6, false); break;
-    case 'E':
-      ctx.save(); ctx.translate(x + 3, y); ctx.scale(0.5, 0.5); drawExit(ctx, 0, 0, true, t); ctx.restore(); break;
-    case '.':
-      px(ctx, '#ff5a6a', x + 2, y + 5, 8, 2); px(ctx, '#ffffff', x + 2, y + 5, 3, 2); break;
+    case '~': drawCrumble(ctx, X, Y, 0); break;
+    case 'v': drawStalactite(ctx, X + 4, Y); break;
+    case '*': drawSparkle(ctx, X + 12, Y + 12, t); break;
+    case 'o': drawOil(ctx, X + 4, Y + 4); break;
+    case 's': drawSpriteArt(SLIME_A, SCOL, X + 2, Y + 10, false); break;
+    case 'b': drawSpriteArt(BAT_A, BCOL, X + 2, Y + 6, false); break;
+    case 'P': drawSpriteArt(PLAYER_A, PCOL, X + 2, Y - 12, false); break;
+    case 'E': drawExit(ctx, X, Y - AT, true, t); break;
   }
+}
+function drawTileIcon(ch, x, y, t) {
+  if ('#B-^'.includes(ch)) { ctx.drawImage(tileIcon(ch), 0, AT, AT, AT, x, y + (ch === '-' ? 3 : 0), TILE, TILE); return; }
+  if (ch === '.') { px(ctx, '#ff5a6a', x + 2, y + 5, 8, 2); px(ctx, '#ffffff', x + 2, y + 5, 3, 2); return; }
+  if (ch === 'E') { ctx.save(); ctx.translate(x + 3, y); ctx.scale(0.25, 0.25); drawExit(ctx, 0, 0, true, t); ctx.restore(); return; }
+  if (ch === 'P') { artView(() => drawSpriteArt(PLAYER_A, PCOL, x * ART + 2, y * ART - 12, false)); return; }
+  artView(() => drawCellArt(ch, x, ch === '~' ? y + 3 : y, t));
 }
 function drawEditor() {
   if (!ed.staticCanvas) ed.staticCanvas = renderStatic(ed.grid);
   ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(ed.staticCanvas, 0, 0);
-  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
-    const ch = ed.grid[r][c], x = c * TILE, y = r * TILE;
-    if (ch === '~') drawCrumble(ctx, x, y, 0);
-    else if (ch === 'v') drawStalactite(ctx, x + 2, y);
-    else if (ch === '*') drawSparkle(ctx, x + 6, y + 6, frame + c * 7);
-    else if (ch === 'o') drawOil(ctx, x + 2, y + 2);
-    else if (ch === 's') drawSprite(ctx, SLIME_A, SCOL, x + 1, y + 5, false);
-    else if (ch === 'b') drawSprite(ctx, BAT_A, BCOL, x + 1, y + 3, false);
-    else if (ch === 'P') drawSprite(ctx, PLAYER_A, PCOL, x + 2, y - 6, false);
-    else if (ch === 'E') drawExit(ctx, x, y - 12, true, frame);
-  }
+  ctx.drawImage(ed.staticCanvas, 0, 0, VW, PLAY_H);
+  artView(() => {
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) drawCellArt(ed.grid[r][c], c * TILE, r * TILE, frame + c * 7);
+  });
   ctx.fillStyle = 'rgba(255,255,255,0.05)';
   for (let c = 1; c < COLS; c++) ctx.fillRect(c * TILE, 0, 0.25, PLAY_H);
   for (let r = 1; r < ROWS; r++) ctx.fillRect(0, r * TILE, VW, 0.25);
