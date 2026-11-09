@@ -521,14 +521,39 @@ function drawExit(g, x, y, open, t) {
 
 // Sprites are designed small, then enlarged with Scale2x (which smooths diagonals),
 // shaded top-lit and given a dark outline. Each frame is drawn once and cached.
-const PLAYER_A = [
-  '...yyyy...', '..yyyyyyl.', '..yyyyyyll', '.yyyyyyyy.', '...sssks..', '...sssss..',
-  '....sss...', '..cccccc..', '.cccccccc.', '.cCccccCs.', '.sCccccC..', '..cccccc..',
-  '..kkkkkk..', '..pppppp..', '..pp..pp..', '..pp..pp..', '..bb..bb..', '.bbb..bbb.',
-];
-const PLAYER_B = PLAYER_A.slice(0, 13).concat(['..pppppp..', '..ppp.pp..', '.pp....pp.', '.bb....bb.', 'bbb....bbb']);
-const PLAYER_J = PLAYER_A.slice(0, 13).concat(['..pppppp..', '.ppp..ppp.', '.bb....bb.', 'bb......bb', '..........']);
-const PCOL = { y: '#f2c230', l: '#fff6a0', s: '#f0b890', k: '#1a1030', c: '#3aa6a0', C: '#237570', b: '#6a4a2a', p: '#4a3a8a' };
+// The miner is built from a head, a torso (with arm pose) and legs, so each run pose can swing the arms.
+// Front arm and leg are lighter (a, s, p, b); the far arm and leg are darker (C, S, q, Q).
+const P_HEAD = ['...yyyy...', '..yyyyyyl.', '..yyyyyyll', '.yyyyyyyy.', '...sssks..', '...sssss..', '....sss...'];
+const P_ARMS = {
+  rest:  ['..cccccc..', '.CccccaaC.', '.CccccaaC.', '.Scccccs..', '..cccccc..', '..kkkkkk..'],
+  fwd:   ['..cccccc..', '.Ccccccca.', 'C.ccccc.a.', 'S.cccccc.s', '..cccccc..', '..kkkkkk..'],
+  back:  ['..cccccc..', '.accccccC.', 'a.ccccc.C.', 's.cccccc.S', '..cccccc..', '..kkkkkk..'],
+  up:    ['a.cccccc.C', 'a.cccccc.C', '.accccccC.', '..cccccc..', '..cccccc..', '..kkkkkk..'],
+  out:   ['..cccccc..', 'CCccccccaa', 'S.cccccc.s', '..cccccc..', '..cccccc..', '..kkkkkk..'],
+};
+const P_LEGS = {
+  stand:   ['..qqpppp..', '..qq..pp..', '..qq..pp..', '..QQ..bb..', '.QQQ..bbb.'],
+  strideA: ['..qqpppp..', '..qq..pp..', '.qq....pp.', '.qq....pp.', 'QQQ....bbb'],
+  passA:   ['..qqpppp..', '...qqpp...', '...qqpp...', '..QQ.pp...', '.....bbb..'],
+  strideB: ['..pppqqq..', '..pp..qq..', '.pp....qq.', '.pp....qq.', 'bbb....QQQ'],
+  passB:   ['..ppppqq..', '...ppqq...', '...ppqq...', '..bb.qq...', '.....QQQ..'],
+  jump:    ['..qqpppp..', '.qqq..ppp.', '.QQ....bb.', 'QQ......bb', '..........'],
+  fall:    ['..qqpppp..', '..qq..pp..', '.qq....pp.', '.qq....pp.', 'QQ......bb'],
+};
+// Crouching drops the head and body by a row and bends the knees (4-row legs).
+const CROUCH_LEGS = ['..qqpppp..', '.qq....pp.', '.QQ....bb.', 'QQQ....bbb'];
+const miner = (arms, legs) => P_HEAD.concat(P_ARMS[arms], P_LEGS[legs]);
+const crouch = arms => ['..........'].concat(P_HEAD, P_ARMS[arms], CROUCH_LEGS);
+const PLAYER_A = miner('rest', 'stand');
+const PLAYER_J = miner('up', 'jump');
+const PLAYER_TAKEOFF = crouch('back');   // first frames after the jump key (visual only: the jump starts at once)
+const PLAYER_FALL = miner('out', 'fall');
+const PLAYER_LAND = crouch('rest');
+const TAKEOFF_TICKS = 3, LAND_TICKS = 5;
+// Run cycle: a new pose every RUN_POSE_PX of ground covered, arms swinging opposite to the legs.
+const PLAYER_RUN = [miner('back', 'strideA'), miner('rest', 'passA'), miner('fwd', 'strideB'), miner('rest', 'passB')];
+const RUN_POSE_PX = 9;
+const PCOL = { y: '#f2c230', l: '#fff6a0', s: '#f0b890', S: '#c08868', k: '#1a1030', c: '#3aa6a0', C: '#1d6560', a: '#4cc0b8', b: '#6a4a2a', Q: '#4a3420', p: '#5a48a0', q: '#362a68' };
 const SLIME_A = ['...gggg...', '..gggggg..', '.gwkggwkg.', '.gggggggg.', 'gggggggggg', 'gGggGgggGg', 'GGGGGGGGGG'];
 const SLIME_B = ['..........', '...gggg...', '.gggggggg.', 'gwkggggwkg', 'gggggggggg', 'gGggGgggGg', 'GGGGGGGGGG'];
 const SCOL = { g: '#7fd04a', G: '#3f8a2a', w: '#ffffff', k: '#10202a' };
@@ -659,7 +684,7 @@ function resetActors() {
   run.crumble = {};
   run.standOn = [];
   player = { x: run.start.c * TILE + 2, y: (run.start.r + 1) * TILE - P_H, vx: 0, vy: 0, onGround: true,
-             face: 1, coyote: 0, jumpBuf: 0, anim: 0 };
+             face: 1, coyote: 0, jumpBuf: 0, dist: 0, takeoff: 0, land: 0 };
   enemies = run.enemyDefs.map(e => e.type === 's'
     ? { type: 's', x: e.c * TILE + 1, y: (e.r + 1) * TILE - 7, w: 10, h: 7, vx: 0.45, anim: 0 }
     : { type: 'b', x: e.c * TILE + 1, y0: e.r * TILE + 3, y: e.r * TILE + 3, w: 10, h: 6, vx: 0.8, t: Math.floor(hash(e.c, e.r) * 100) });
@@ -719,6 +744,9 @@ function endRun(kind) {
 // ---------- Player ----------
 function updatePlayer() {
   const p = player;
+  const x0 = p.x, wasOnGround = p.onGround;
+  if (p.takeoff > 0) p.takeoff--;
+  if (p.land > 0) p.land--;
   const dir = ((keys.ArrowRight || keys.KeyD) ? 1 : 0) - ((keys.ArrowLeft || keys.KeyA) ? 1 : 0);
   if (dir) p.face = dir;
   // Fixed-arc jump with a little steering in the air.
@@ -728,7 +756,7 @@ function updatePlayer() {
   if (jumpPressed()) p.jumpBuf = 6; else if (p.jumpBuf > 0) p.jumpBuf--;
   if (p.onGround) p.coyote = 5; else if (p.coyote > 0) p.coyote--;
   if (p.jumpBuf > 0 && p.coyote > 0) {
-    p.vy = JUMP_V; p.jumpBuf = 0; p.coyote = 0; p.onGround = false;
+    p.vy = JUMP_V; p.jumpBuf = 0; p.coyote = 0; p.onGround = false; p.takeoff = TAKEOFF_TICKS;
     SFX.jump();
   }
   p.vy = Math.min(p.vy + GRAV, MAX_FALL);
@@ -765,7 +793,10 @@ function updatePlayer() {
     const r = Math.floor(p.y / TILE);
     for (let c = c0; c <= c1; c++) if (isSolidCh(tileAt(c, r))) { p.y = (r + 1) * TILE; p.vy = 0; break; }
   }
-  if (p.onGround && p.vx !== 0) p.anim++;
+  // Animation follows distance covered on the ground, so poses never change faster than the feet move.
+  if (p.onGround && p.x !== x0) p.dist += Math.abs(p.x - x0);
+  p.moving = p.onGround && p.x !== x0;
+  if (p.onGround && !wasOnGround) p.land = LAND_TICKS;
 }
 
 function updateCrumbles() {
@@ -1037,7 +1068,10 @@ function drawWorldBase() {
     }
     if (state === 'play' || state === 'clear') {
       const p = player;
-      const frameMap = !p.onGround ? PLAYER_J : Math.floor(p.anim / 6) % 2 ? PLAYER_B : PLAYER_A;
+      const frameMap = !p.onGround
+        ? (p.takeoff > 0 ? PLAYER_TAKEOFF : p.vy < 0 ? PLAYER_J : PLAYER_FALL)
+        : p.land > 0 ? PLAYER_LAND
+        : p.moving ? PLAYER_RUN[Math.floor(p.dist / RUN_POSE_PX) % PLAYER_RUN.length] : PLAYER_A;
       drawSpriteArt(frameMap, PCOL, (snap(lerpX(p)) - 1) * ART, snap(lerpY(p)) * ART, p.face < 0);
     }
     for (const q of particles) px(ctx, q.col, snap(q.x) * ART, snap(q.y) * ART, 2, 2);
