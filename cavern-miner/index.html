@@ -80,22 +80,22 @@ const DEFAULT_LEVELS = [
     '#.........................*.................*..................#',
     '#.................................-------......................#',
     '#..............................................................#',
-    '#.E...........*.............................................*..#',
-    '##################################################......########',
+    '#.E...........*................................................#',
+    '##################################################---....*.#####',
     '#.......................................................########',
     '#.......................................................########',
-    '#....................................................###########',
     '#....................................................###########',
     '#..................................................*.###########',
     '#.................................................##############',
     '#.................................................##############',
-    '#.................................................##############',
-    '#..........*...................................#################',
     '#..............................................#################',
-    '#...................*..........................#################',
-    '#.......-------.............................####################',
+    '#..............................................#################',
+    '#..........*................................####################',
     '#...........................................####################',
-    '#.P.....................s....o..^^....*.....####################',
+    '#...................*....................#######################',
+    '#.......-------..........................#######################',
+    '#.....................................##########################',
+    '#.P.....................s....o..^^..*.##########################',
     '################################################################',
   ]},
   { name: 'Deep Workings', oil: 300, map: [
@@ -115,37 +115,37 @@ const DEFAULT_LEVELS = [
     '#.....................*...............................o........................................#',
     '#.........-------.................................---------....................................#',
     '#..............................................................................................#',
-    '#..P........................s.......^^......*...............................*...............*..#',
-    '####################################################################################......######',
-    '#.........................................................................................######',
-    '#.......................................................................................*.######',
-    '#......................................................................................#########',
-    '#......................................................................................#########',
-    '#.......................................b..............................................#########',
-    '#...................................................................................############',
-    '#...................................................................................############',
-    '#...................................................................................############',
-    '#......................*.......................................*.................###############',
-    '#................................................................................###############',
-    '#................................................................................###############',
-    '#...................-------.................................-------...........##################',
-    '#.............................................................................##################',
-    '#..*..........................*...........^^......s...........................##################',
-    '######......####################################################################################',
-    '######................................................................v........................#',
-    '######.........................................................................................#',
-    '#########......................................................................................#',
-    '#########......................................................................................#',
-    '#########......................................................................................#',
-    '############..................................................b................................#',
-    '############...................................................................................#',
-    '############...................................................................................#',
-    '###############............................*.....................................*.............#',
-    '###############................................................................................#',
-    '###############................................................................................#',
-    '##################......................-------...............................-------..........#',
-    '##################.............................................................................#',
-    '##################..*.....s.......^^....................o...............*...................E..#',
+    '#..P........................s.......^^......*...............................*........*.........#',
+    '#####################################################################################---......##',
+    '#..........................................................................................###.#',
+    '#........................................................................................*.###.#',
+    '#.......................................................................................######.#',
+    '#.......................................................................................######.#',
+    '#.......................................b............................................#########.#',
+    '#....................................................................................#########.#',
+    '#.................................................................................############.#',
+    '#.................................................................................############.#',
+    '#......................*.......................................*...............###############.#',
+    '#..............................................................................###############.#',
+    '#...........................................................................##################.#',
+    '#...................-------.................................-------.........##################.#',
+    '#........................................................................#####################.#',
+    '#....*........................*...........^^......s......................#####################.#',
+    '#......---######################################################################################',
+    '####..................................................................v........................#',
+    '####...........................................................................................#',
+    '#######........................................................................................#',
+    '#######........................................................................................#',
+    '##########.....................................................................................#',
+    '##########....................................................b................................#',
+    '#############..................................................................................#',
+    '#############..................................................................................#',
+    '################...........................*.....................................*.............#',
+    '################...............................................................................#',
+    '###################............................................................................#',
+    '###################.....................-------...............................-------..........#',
+    '######################.........................................................................#',
+    '######################..*.s.......^^....................o...............*...................E..#',
     '################################################################################################',
   ]},
   { name: 'The Old Dig', oil: 90, map: [
@@ -618,13 +618,6 @@ function drawExit(g, x, y, open, t) {
 // lean: shoulders forward in art pixels. air: lift off the ground. Poses are drawn once into 40 x 40 art-pixel
 // frames with the feet on row 38 and the body centred on column 17.5, then mirrored for facing left.
 const MF = 40, M_GROUND = 38, M_CX = 17.5;
-const MC = {
-  helmet: '#f2c230', helmetHi: '#ffe27a', helmetLo: '#b88a1a', lamp: '#fff6a0', lampRim: '#c8c8d8',
-  skin: '#f0b890', skinLo: '#c88a68', eye: '#1a1030',
-  coat: '#3aa6a0', coatHi: '#62c8c0', coatLo: '#237570', belt: '#1a1030', buckle: '#d8b040',
-  nearArm: '#4cc0b8', farArm: '#1d6560', nearHand: '#f0b890', farHand: '#b88060',
-  nearLeg: '#5a48a0', farLeg: '#33275f', nearBoot: '#7a5430', farBoot: '#4a3420', outline: '#0a0716',
-};
 const M_THIGH = 6, M_SHIN = 6, M_UPPER = 5, M_FORE = 5;
 const POSES = {
   stand:   { lt: 0, lk: 0, ft: 0, fk: 0, la: 4, le: 10, fa: 4, fe: 10, lean: 0 },
@@ -640,68 +633,108 @@ const POSES = {
   rising:  { lt: 60, lk: 95, ft: -25, fk: 40, la: 125, le: 35, fa: -40, fe: 30, lean: 1, air: 4 },
   apex:    { lt: 30, lk: 45, ft: -40, fk: 30, la: 110, le: 25, fa: -60, fe: 25, lean: 1, air: 4 },
   falling: { lt: 55, lk: 35, ft: -30, fk: 25, la: 100, le: 20, fa: -80, fe: 20, lean: 0, air: 2 },
-  landing: { lt: 40, lk: 80, ft: 25, fk: 75, la: 60, le: 40, fa: 40, fe: 50, lean: 3 },
+  landing: { lt: 40, lk: 80, ft: 25, fk: 75, la: 40, le: 30, fa: 40, fe: 30, lean: 3 },
 };
 const RUN_POSES = ['run1', 'run2', 'run3', 'run4', 'run5', 'run6'];
 const RUN_POSE_PX = 8;                    // a new run pose every 8 game pixels of ground covered
 const TAKEOFF_TICKS = 3, LAND_TICKS = 5;  // visual only: the jump itself starts at once
 const APEX_VY = 1.2;                      // vertical speed below which the jump shows the apex pose
 const mRad = d => d * Math.PI / 180;
+const MC = {
+  helmet: '#f2c230', helmetHi: '#ffe27a', helmetLo: '#b88a1a', lamp: '#fff6a0', lampRim: '#c8c8d8',
+  skin: '#f0b890', skinLo: '#c88a68', eye: '#1a1030',
+  coat: '#3aa6a0', coatHi: '#62c8c0', coatLo: '#237570', belt: '#1a1030', buckle: '#d8b040',
+  nearArm: '#4cc0b8', farArm: '#1d6560', nearHand: '#f0b890', farHand: '#b88060',
+  nearLeg: '#5a48a0', farLeg: '#33275f', nearBoot: '#7a5430', farBoot: '#4a3420',
+  outline: '#0a0716',
+  bone: '#ece6cc', boneLo: '#b4ac8c', boneFar: '#d6d0b9', spine: '#e1dbc2', socket: '#1a1030', glow: '#9ff0ff',
+};
+let M_SKEL = false;   // true: draw the skeleton form
 function mDot(g, col, x, y, s) { g.fillStyle = col; g.fillRect(Math.round(x - s / 2), Math.round(y - s / 2), s, s); }
 function mLimb(g, col, x0, y0, x1, y1, s) {
   const n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) * 2));
   for (let i = 0; i <= n; i++) mDot(g, col, x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n, s);
 }
+// Angles are degrees from straight down; positive swings forward (to the right).
 function mLeg(g, hx, hy, thigh, knee, near) {
   const kx = hx + Math.sin(mRad(thigh)) * M_THIGH, ky = hy + Math.cos(mRad(thigh)) * M_THIGH;
   const shin = thigh - knee;
   const fx = kx + Math.sin(mRad(shin)) * M_SHIN, fy = ky + Math.cos(mRad(shin)) * M_SHIN;
-  const col = near ? MC.nearLeg : MC.farLeg;
-  mLimb(g, col, hx, hy, kx, ky, 4);
-  mLimb(g, col, kx, ky, fx, fy, 4);
-  g.fillStyle = near ? MC.nearBoot : MC.farBoot;
+  if (M_SKEL) {
+    const bc = near ? MC.bone : MC.boneFar;   // far mLeg in the same soft shade as the far mArm; no knee shading
+    mLimb(g, bc, hx, hy, kx, ky, 2); mLimb(g, bc, kx, ky, fx, fy, 2);
+    g.fillStyle = bc; g.fillRect(Math.round(fx - 1), Math.round(fy), 5, 2);   // foot bones
+    return fy + 2;
+  }
+  mLimb(g, near ? MC.nearLeg : MC.farLeg, hx, hy, kx, ky, 4);
+  mLimb(g, near ? MC.nearLeg : MC.farLeg, kx, ky, fx, fy, 4);
+  // Boot: points forward, flat to the shin's angle.
+  const bc = near ? MC.nearBoot : MC.farBoot;
+  g.fillStyle = bc;
   g.fillRect(Math.round(fx - 2), Math.round(fy - 1), 6, 3);
+  return fy + 2;
 }
 function mArm(g, sx, sy, upper, elbow, near) {
   const ex = sx + Math.sin(mRad(upper)) * M_UPPER, ey = sy + Math.cos(mRad(upper)) * M_UPPER;
   const fore = upper + elbow;
   const hx = ex + Math.sin(mRad(fore)) * M_FORE, hy = ey + Math.cos(mRad(fore)) * M_FORE;
+  if (M_SKEL) {
+    const bc = near ? MC.bone : MC.boneFar;
+    // Arm bones are 1 art pixel thick, so an mArm across the chest doesn't fill the gaps between the ribs.
+    mLimb(g, bc, sx, sy, ex, ey, 1); mLimb(g, bc, ex, ey, hx, hy, 1);
+    mDot(g, bc, ex, ey, 2); mDot(g, bc, hx, hy, 2);   // elbows the same colour as the mArm
+    return;
+  }
   mLimb(g, near ? MC.nearArm : MC.farArm, sx, sy, ex, ey, 3);
   mLimb(g, near ? MC.nearArm : MC.farArm, ex, ey, hx, hy, 3);
   mDot(g, near ? MC.nearHand : MC.farHand, hx, hy, 3);
 }
 function mTorsoHead(g, hx, hy, lean) {
+  if (M_SKEL) return mSkelTorsoHead(g, hx, hy, lean);
+  // Torso: 8 wide, 11 tall, leaning by `lean` pixels at the shoulders.
   for (let i = 0; i < 11; i++) {
-    const off = Math.round(lean * (11 - i) / 11), y = hy - 11 + i;
+    const off = Math.round(lean * (11 - i) / 11);
+    const y = hy - 11 + i;
     g.fillStyle = MC.coat; g.fillRect(hx - 5 + off, y, 9, 1);
     g.fillStyle = MC.coatHi; g.fillRect(hx + 2 + off, y, 2, 1);
     g.fillStyle = MC.coatLo; g.fillRect(hx - 5 + off, y, 2, 1);
   }
   g.fillStyle = MC.belt; g.fillRect(hx - 5, hy - 2, 9, 2);
   g.fillStyle = MC.buckle; g.fillRect(hx + 1, hy - 2, 2, 2);
-  const cx = hx + lean, top = hy - 20;
-  g.fillStyle = MC.skin; g.fillRect(cx - 3, top + 3, 7, 7); g.fillRect(cx + 4, top + 6, 1, 2); g.fillRect(cx - 1, top + 10, 3, 2);
-  g.fillStyle = MC.skinLo; g.fillRect(cx - 3, top + 8, 2, 2); g.fillRect(cx, top + 9, 3, 1);
+  // Head in profile, facing right.
+  const cx = hx + lean, top = hy - 11 - 9;
+  g.fillStyle = MC.skin; g.fillRect(cx - 3, top + 3, 7, 7);
+  g.fillStyle = MC.skin; g.fillRect(cx + 4, top + 6, 1, 2);          // nose
+  g.fillStyle = MC.skinLo; g.fillRect(cx - 3, top + 8, 2, 2);        // jaw shadow
   g.fillStyle = MC.eye; g.fillRect(cx + 2, top + 5, 1, 2);
+  g.fillStyle = MC.skinLo; g.fillRect(cx, top + 9, 3, 1);            // chin line
+  g.fillStyle = MC.skin; g.fillRect(cx - 1, top + 10, 3, 2);         // neck
+  // Helmet: dome with a brim that sticks out at the front, lamp on the front.
   g.fillStyle = MC.helmet; g.fillRect(cx - 4, top, 8, 4); g.fillRect(cx - 3, top - 1, 6, 1);
   g.fillStyle = MC.helmetHi; g.fillRect(cx - 2, top - 1, 3, 1); g.fillRect(cx - 3, top, 2, 1);
-  g.fillStyle = MC.helmetLo; g.fillRect(cx - 5, top + 3, 12, 1);
+  g.fillStyle = MC.helmetLo; g.fillRect(cx - 5, top + 3, 12, 1);     // brim
   g.fillStyle = MC.lampRim; g.fillRect(cx + 4, top, 2, 3);
   g.fillStyle = MC.lamp; g.fillRect(cx + 5, top + 1, 1, 1);
 }
+// p: { lt, lk, ft, fk } near/far thigh and knee; { la, le, fa, fe } near/far upper mArm and elbow; lean; air (y lift)
 function drawPose(g, p) {
+  if (M_SKEL) p = Object.assign({}, p, { lean: 0 });   // skeleton runs upright so the ribcage stays crisp
   const tmp = document.createElement('canvas'); tmp.width = MF; tmp.height = MF;
   const t = tmp.getContext('2d');
-  const hx = 18, hy0 = 24, lean = p.lean || 0;
-  // Put the lowest foot on the ground (less any lift for airborne poses).
+  const hx = 18, hy0 = 24;
+  // Find where the lowest foot lands, then shift so it touches the ground (unless airborne).
   const footY = (thigh, knee) => hy0 + Math.cos(mRad(thigh)) * M_THIGH + Math.cos(mRad(thigh - knee)) * M_SHIN + 2;
-  const hy = hy0 + (M_GROUND - Math.max(footY(p.lt, p.lk), footY(p.ft, p.fk))) - (p.air || 0);
-  const sy = hy - 10;
-  mArm(t, hx + lean - 1, sy, p.fa, p.fe, false);
+  const low = Math.max(footY(p.lt, p.lk), footY(p.ft, p.fk));
+  const hy = hy0 + (M_GROUND - low) - (p.air || 0);
+  const sy = hy - (M_SKEL ? 9 : 10);   // skeleton shoulders sit below the neck
+  mArm(t, hx + (p.lean || 0) - 1, sy, p.fa, p.fe, false);
   mLeg(t, hx - 1, hy, p.ft, p.fk, false);
-  mTorsoHead(t, hx, hy, lean);
-  mLeg(t, hx + 1, hy, p.lt, p.lk, true);
-  mArm(t, hx + lean + 1, sy, p.la, p.le, true);
+  if (M_SKEL) mLeg(t, hx + 1, hy, p.lt, p.lk, true);   // skeleton: near leg behind the ribcage so the ribs stay clear
+  mTorsoHead(t, hx, hy, p.lean || 0);
+  if (!M_SKEL) mLeg(t, hx + 1, hy, p.lt, p.lk, true);
+  mArm(t, hx + (p.lean || 0) + 1, sy, p.la, p.le, true);
+  if (M_SKEL) mSkelRibs(t, hx, hy, p.lean || 0);   // spine and ribs stay on top of the arms
+  // Dark outline around the whole figure.
   const img = t.getImageData(0, 0, MF, MF).data;
   const solid = (x, y) => x >= 0 && y >= 0 && x < MF && y < MF && img[(y * MF + x) * 4 + 3] > 0;
   g.fillStyle = MC.outline;
@@ -710,9 +743,43 @@ function drawPose(g, p) {
   }
   g.drawImage(tmp, 0, 0);
 }
+
+// Skeleton form: spine, ribs and pelvis, a skull under the same helmet and lamp.
+function mSkelTorsoHead(g, hx, hy, lean) {
+  for (let i = 0; i < 11; i++) {
+    const off = Math.round(lean * (11 - i) / 11), y = hy - 11 + i;
+    if (i >= 1 && i <= 9) { g.fillStyle = MC.socket; g.fillRect(hx - 4 + off, y, 8, 1); }  // dark chest cavity
+    g.fillStyle = MC.spine; g.fillRect(hx - 2 + off, y, 2, 1);                       // spine
+    if (i === 2 || i === 5 || i === 8) { g.fillStyle = MC.bone; g.fillRect(hx - 4 + off, y, 8, 1); }  // ribs, 2 dark rows apart
+  }
+  g.fillStyle = MC.bone; g.fillRect(hx - 4, hy - 2, 7, 2);                             // pelvis
+  g.fillStyle = MC.boneLo; g.fillRect(hx - 2, hy - 1, 2, 1);
+  const cx = hx + lean, top = hy - 21;   // skull raised 1 px to show the neck
+  g.fillStyle = MC.bone; g.fillRect(cx - 3, top + 3, 7, 5); g.fillRect(cx - 2, top + 8, 6, 2);   // skull and jaw
+  g.fillStyle = MC.socket; g.fillRect(cx + 1, top + 4, 2, 2);                          // eye socket
+  g.fillStyle = MC.socket; g.fillRect(cx + 3, top + 6, 1, 1);                          // nose
+  g.fillStyle = MC.boneLo; g.fillRect(cx, top + 8, 4, 1);                              // teeth line
+  g.fillStyle = MC.socket; g.fillRect(cx + 1, top + 8, 1, 1); g.fillRect(cx + 3, top + 8, 1, 1);
+  g.fillStyle = MC.boneLo; g.fillRect(cx - 1, top + 10, 2, 1);                         // neck
+  g.fillStyle = MC.helmet; g.fillRect(cx - 4, top, 8, 4); g.fillRect(cx - 3, top - 1, 6, 1);
+  g.fillStyle = MC.helmetHi; g.fillRect(cx - 2, top - 1, 3, 1); g.fillRect(cx - 3, top, 2, 1);
+  g.fillStyle = MC.helmetLo; g.fillRect(cx - 5, top + 3, 12, 1);
+  g.fillStyle = MC.lampRim; g.fillRect(cx + 4, top, 2, 3);
+  g.fillStyle = MC.lamp; g.fillRect(cx + 5, top + 1, 1, 1);
+}
+function mSkelRibs(g, hx, hy, lean) {
+  // Neck: two dark rows between the jaw and the first rib with only the vertebrae showing.
+  g.fillStyle = MC.socket; g.fillRect(hx - 4, hy - 12, 8, 2);
+  g.fillStyle = MC.spine; g.fillRect(hx - 2, hy - 12, 2, 2);
+  for (let i = 0; i < 11; i++) {
+    const off = Math.round(lean * (11 - i) / 11), y = hy - 11 + i;
+    if (i === 2 || i === 5 || i === 8) { g.fillStyle = MC.bone; g.fillRect(hx - 4 + off, y, 8, 1); }
+    g.fillStyle = MC.spine; g.fillRect(hx - 2 + off, y, 2, 1);
+  }
+}
 const minerCache = {};
 function minerFrame(name, flip) {
-  const key = name + (flip ? '<' : '>');
+  const key = (M_SKEL ? 'skel:' : '') + name + (flip ? '<' : '>');
   if (!minerCache[key]) {
     const cv = document.createElement('canvas'); cv.width = MF; cv.height = MF;
     const g = cv.getContext('2d');
@@ -884,6 +951,7 @@ function startGame(idx) {
 }
 function startLevel(idx) {
   levelIdx = idx;
+  M_SKEL = !testMode && idx % 2 === 1;   // levels alternate: 1, 3, 5, 7 normal miner; 2, 4, 6 skeleton
   run = makeRun(testMode ? testDef : levels[idx]);
   resetActors();
   particles = [];
@@ -1427,6 +1495,7 @@ const ed = { idx: 0, grid: null, name: '', oil: 90, tile: '#', dirty: false, msg
 
 function openEditor(idx) {
   state = 'editor';
+  M_SKEL = false;
   ed.idx = clamp(idx, 0, levels.length - 1);
   loadEdCavern();
   edMsg('Level editor. Press H for help.');
