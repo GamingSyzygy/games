@@ -775,9 +775,24 @@ function updateEnd() {
 
 // ---------- Rendering: play ----------
 function lightRadius() { return 30 + 80 * (oil / 100) + Math.sin(frame * 0.3) * 1.2; }
+// The darkness layer is drawn at full screen resolution so the edge of the lamp light moves smoothly.
 const dark = document.createElement('canvas');
-dark.width = VW; dark.height = PLAY_H;
 const dctx = dark.getContext('2d');
+function sizeDark() {
+  if (dark.width !== VW * SCALE || dark.height !== PLAY_H * SCALE) { dark.width = VW * SCALE; dark.height = PLAY_H * SCALE; }
+}
+// Smooth movement: positions are blended between game ticks and drawn at screen-pixel precision,
+// instead of jumping between the coarse game pixels.
+let renderAlpha = 1;
+const snap = v => Math.round(v * SCALE) / SCALE;
+const lerpX = o => (o.px === undefined ? o.x : o.px + (o.x - o.px) * renderAlpha);
+const lerpY = o => (o.py === undefined ? o.y : o.py + (o.y - o.py) * renderAlpha);
+function savePrevPositions() {
+  if (!run || !player) return;
+  player.px = player.x; player.py = player.y;
+  for (const e of enemies) { e.px = e.x; e.py = e.y; }
+  for (const s of stals) { s.px = s.x; s.py = s.y; }
+}
 function punchLight(x, y, r, strength) {
   const g = dctx.createRadialGradient(x, y, r * 0.15, x, y, r);
   g.addColorStop(0, `rgba(0,0,0,${strength})`);
@@ -790,8 +805,8 @@ function punchLight(x, y, r, strength) {
 const cam = { x: 0, y: 0 };
 function updateCamera() {
   const maxX = Math.max(0, run.cols * TILE - VW), maxY = Math.max(0, run.rows * TILE - PLAY_H);
-  cam.x = Math.round(clamp(player.x + P_W / 2 - VW / 2, 0, maxX));
-  cam.y = Math.round(clamp(player.y + P_H / 2 - PLAY_H / 2, 0, maxY));
+  cam.x = snap(clamp(lerpX(player) + P_W / 2 - VW / 2, 0, maxX));
+  cam.y = snap(clamp(lerpY(player) + P_H / 2 - PLAY_H / 2, 0, maxY));
 }
 function worldView(fn) {
   ctx.save();
@@ -801,6 +816,8 @@ function worldView(fn) {
   ctx.restore();
 }
 function drawDarkness() {
+  sizeDark();
+  dctx.setTransform(SCALE, 0, 0, SCALE, 0, 0);
   dctx.globalCompositeOperation = 'source-over';
   dctx.clearRect(0, 0, VW, PLAY_H);
   dctx.fillStyle = 'rgba(2,2,12,0.9)';
@@ -808,17 +825,17 @@ function drawDarkness() {
   dctx.globalCompositeOperation = 'destination-out';
   dctx.save();
   dctx.translate(-cam.x, -cam.y);
+  const plx = lerpX(player), ply = lerpY(player);
   if (state !== 'dying') {
-    const lx = player.x + (player.face > 0 ? P_W : 0), ly = player.y + 3;
-    punchLight(lx, ly, lightRadius(), 1);
+    punchLight(plx + (player.face > 0 ? P_W : 0), ply + 3, lightRadius(), 1);
   } else {
-    punchLight(player.x + P_W / 2, player.y + P_H / 2, 40 * (stateTimer / 70), 1);
+    punchLight(plx + P_W / 2, ply + P_H / 2, 40 * (stateTimer / 70), 1);
   }
   for (const s of run.sparkles) if (!s.taken) punchLight(s.c * TILE + 6, s.r * TILE + 6, 14, 0.5);
   if (run.open) punchLight(run.exit.c * TILE + 6, run.exit.r * TILE, 30, 0.8);
   dctx.restore();
   dctx.globalCompositeOperation = 'source-over';
-  ctx.drawImage(dark, 0, 0);
+  ctx.drawImage(dark, 0, 0, VW, PLAY_H);
 }
 function drawWorld() {
   ctx.imageSmoothingEnabled = false;
@@ -836,19 +853,20 @@ function drawWorldBase() {
   for (const s of stals) {
     if (s.state === 'gone') continue;
     const j = s.state === 'shake' ? (frame % 4 < 2 ? -1 : 1) : 0;
-    drawStalactite(ctx, s.x + j, s.y);
+    drawStalactite(ctx, snap(s.x + j), snap(lerpY(s)));
   }
   drawExit(ctx, run.exit.c * TILE, (run.exit.r - 1) * TILE, run.open, frame);
   for (const e of enemies) {
-    if (e.type === 's') drawSprite(ctx, Math.floor(e.anim / 16) % 2 ? SLIME_B : SLIME_A, SCOL, Math.round(e.x), Math.round(e.y), e.vx < 0);
-    else drawSprite(ctx, Math.floor(e.t / 8) % 2 ? BAT_B : BAT_A, BCOL, Math.round(e.x), Math.round(e.y), false);
+    const ex = snap(lerpX(e)), ey = snap(lerpY(e));
+    if (e.type === 's') drawSprite(ctx, Math.floor(e.anim / 16) % 2 ? SLIME_B : SLIME_A, SCOL, ex, ey, e.vx < 0);
+    else drawSprite(ctx, Math.floor(e.t / 8) % 2 ? BAT_B : BAT_A, BCOL, ex, ey, false);
   }
   if (state === 'play' || state === 'clear') {
     const p = player;
     const legs = !p.onGround || Math.floor(p.anim / 6) % 2 ? PLAYER_B : PLAYER_A;
-    drawSprite(ctx, legs, PCOL, Math.round(p.x) - 1, Math.round(p.y), p.face < 0);
+    drawSprite(ctx, legs, PCOL, snap(lerpX(p)) - 1, snap(lerpY(p)), p.face < 0);
   }
-  for (const q of particles) px(ctx, q.col, Math.round(q.x), Math.round(q.y), 1, 1);
+  for (const q of particles) px(ctx, q.col, snap(q.x), snap(q.y), 1, 1);
 }
 function drawWorldGlow() {
   // Things that glow are drawn over the darkness so you can always find them.
@@ -856,12 +874,13 @@ function drawWorldGlow() {
   if (run.open) drawExit(ctx, run.exit.c * TILE, (run.exit.r - 1) * TILE, true, frame);
   for (const o of run.oils) if (!o.taken && Math.floor((frame + o.c * 13) / 20) % 3 === 0) px(ctx, '#ffd090', o.c * TILE + 4, o.r * TILE + 6, 1, 1);
   for (const e of enemies) {
-    if (e.type === 'b') px(ctx, '#ff4a5a', Math.round(e.x) + 4, Math.round(e.y) + 2, 2, 1);
+    const ex = snap(lerpX(e)), eyy = snap(lerpY(e));
+    if (e.type === 'b') px(ctx, '#ff4a5a', ex + 4, eyy + 2, 2, 1);
     else {
       ctx.globalAlpha = 0.5;
-      const ey = Math.round(e.y) + (Math.floor(e.anim / 16) % 2 ? 3 : 2);
-      px(ctx, '#ffffff', Math.round(e.x) + (Math.floor(e.anim / 16) % 2 ? 1 : 2), ey, 1, 1);
-      px(ctx, '#ffffff', Math.round(e.x) + (Math.floor(e.anim / 16) % 2 ? 7 : 6), ey, 1, 1);
+      const ey = eyy + (Math.floor(e.anim / 16) % 2 ? 3 : 2);
+      px(ctx, '#ffffff', ex + (Math.floor(e.anim / 16) % 2 ? 1 : 2), ey, 1, 1);
+      px(ctx, '#ffffff', ex + (Math.floor(e.anim / 16) % 2 ? 7 : 6), ey, 1, 1);
       ctx.globalAlpha = 1;
     }
   }
@@ -1269,7 +1288,8 @@ function loop(now) {
   requestAnimationFrame(loop); // schedule first so an error can't freeze the game
   acc += Math.min(0.1, (now - last) / 1000);
   last = now;
-  while (acc >= STEP) { update(); pressed = {}; acc -= STEP; }
+  while (acc >= STEP) { savePrevPositions(); update(); pressed = {}; acc -= STEP; }
+  renderAlpha = acc / STEP;
   draw();
 }
 requestAnimationFrame(loop);
