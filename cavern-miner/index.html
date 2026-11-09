@@ -63,6 +63,91 @@ const isSupportCh = ch => isSolidCh(ch) || isOneWayCh(ch);
 
 // ---------- Caverns ----------
 const DEFAULT_LEVELS = [
+  // Larger caverns that scroll: 2 x 2 screens, then 3 x 3 screens.
+  { name: 'The Long Drift', oil: 160, map: [
+    '################################################################',
+    '#.............................v................................#',
+    '#..............................................................#',
+    '#..............................................................#',
+    '#..............................................................#',
+    '#..............................................................#',
+    '#..............................................................#',
+    '#..............................................................#',
+    '#..............................................................#',
+    '#.......................b.................*....................#',
+    '#.....................................-------..................#',
+    '#..............................................................#',
+    '#....................................*.........................#',
+    '#.................................-------......................#',
+    '#..............................................................#',
+    '#.E.................*..........................................#',
+    '##########...###########################--------################',
+    '#..............................................................#',
+    '#..............................................................#',
+    '#............................................--------..........#',
+    '#..............................................................#',
+    '#...................................................*..........#',
+    '#.......................................--------...............#',
+    '#................*.............................................#',
+    '#............-------...........................................#',
+    '#............................................--------..........#',
+    '#..........*...................................................#',
+    '#.......-------................................................#',
+    '#.......................................--------...............#',
+    '#..............................................................#',
+    '#.P.....................s....o..^^....*.....................*..#',
+    '################################################################',
+  ]},
+  { name: 'Deep Workings', oil: 300, map: [
+    '################################################################################################',
+    '#...................................................................v..........................#',
+    '#..............................................................................................#',
+    '#..............................................................................................#',
+    '#..............................................................................................#',
+    '#..............................................................................................#',
+    '#...........................................................b..................................#',
+    '#..............................................................................................#',
+    '#..............................................................................................#',
+    '#..............................................................................................#',
+    '#..................*...........................................................................#',
+    '#..............-------.........................................................................#',
+    '#..............................................................................................#',
+    '#............*........................................o........................................#',
+    '#.........-------.................................---------....................................#',
+    '#..............................................................................................#',
+    '#..P........................s.......^^......*...............................*...............*..#',
+    '########################################################################--------########......##',
+    '#..............................................................................................#',
+    '#..............................................................................................#',
+    '#............................................................................--------..........#',
+    '#..............................................................................................#',
+    '#.......................................b......................................................#',
+    '#.......................................................................--------...............#',
+    '#..............................................................................................#',
+    '#...........................*..................................................................#',
+    '#........................-------.............................................--------..........#',
+    '#..............................................................................................#',
+    '#..............................................................*...............................#',
+    '#...................-------.................................-------.....--------...............#',
+    '#..............................................................................................#',
+    '#........*....................*...........^^......s.......................................*....#',
+    '##......####--------############################################################################',
+    '#.....................................................................v........................#',
+    '#..............................................................................................#',
+    '#................--------......................................................................#',
+    '#..............................................................................................#',
+    '#..............................................................................................#',
+    '#...........--------..........................................b................................#',
+    '#..............................................................................................#',
+    '#...............................................*..............................................#',
+    '#................--------....................-------...........................................#',
+    '#..............................................................................................#',
+    '#................................................................................*.............#',
+    '#...........--------....................-------...............................-------..........#',
+    '#..............................................................................................#',
+    '#...*.....................s.......^^....................o...............*...................E..#',
+    '################################################################################################',
+  ]},
   { name: 'The Old Dig', oil: 90, map: [
     '################################',
     '#..............................#',
@@ -165,10 +250,13 @@ function store(key, val) {
 
 function validateLevel(l) {
   if (!l || typeof l !== 'object' || !Array.isArray(l.map)) return 'That is not a cavern.';
-  if (l.map.length !== ROWS) return `A cavern needs ${ROWS} rows.`;
+  // A cavern is at least one screen (32 x 16) and at most 4 screens each way.
+  if (l.map.length < ROWS || l.map.length > ROWS * 4) return `A cavern needs ${ROWS} to ${ROWS * 4} rows.`;
+  const w = typeof l.map[0] === 'string' ? l.map[0].length : 0;
+  if (w < COLS || w > COLS * 4) return `A cavern needs ${COLS} to ${COLS * 4} columns.`;
   let p = 0, e = 0, s = 0;
   for (const row of l.map) {
-    if (typeof row !== 'string' || row.length !== COLS) return `Each row needs ${COLS} tiles.`;
+    if (typeof row !== 'string' || row.length !== w) return 'Every row needs the same number of tiles.';
     for (const ch of row) {
       if (!VALID_CHARS.includes(ch)) return `Unknown tile "${ch}".`;
       if (ch === 'P') p++; else if (ch === 'E') e++; else if (ch === '*') s++;
@@ -245,7 +333,7 @@ const SFX = {
   clear() { [392, 523, 659, 784, 1047].forEach((f, i) => tone(f, 0.14, { vol: 0.05, delay: i * 0.09 })); },
   tick() { tone(1200, 0.03, { vol: 0.025 }); },
   cheat() { tone(330, 0.1, { vol: 0.06 }); tone(660, 0.2, { vol: 0.06, delay: 0.1 }); },
-  lowOil() { tone(110, 0.1, { type: 'sine', vol: 0.1 }); },
+  sputter() { noise(0.18, { vol: 0.07, freq: 500 }); tone(90, 0.12, { type: 'sawtooth', vol: 0.04, slide: -30 }); },
   click() { tone(800, 0.03, { type: 'triangle', vol: 0.04 }); },
 };
 
@@ -523,37 +611,120 @@ function drawExit(g, x, y, open, t) {
 // shaded top-lit and given a dark outline. Each frame is drawn once and cached.
 // The miner is built from a head, a torso (with arm pose) and legs, so each run pose can swing the arms.
 // Front arm and leg are lighter (a, s, p, b); the far arm and leg are darker (C, S, q, Q).
-const P_HEAD = ['...yyyy...', '..yyyyyyl.', '..yyyyyyll', '.yyyyyyyy.', '...sssks..', '...sssss..', '....sss...'];
-const P_ARMS = {
-  rest:  ['..cccccc..', '.CccccaaC.', '.CccccaaC.', '.Scccccs..', '..cccccc..', '..kkkkkk..'],
-  fwd:   ['..cccccc..', '.Ccccccca.', 'C.ccccc.a.', 'S.cccccc.s', '..cccccc..', '..kkkkkk..'],
-  back:  ['..cccccc..', '.accccccC.', 'a.ccccc.C.', 's.cccccc.S', '..cccccc..', '..kkkkkk..'],
-  up:    ['a.cccccc.C', 'a.cccccc.C', '.accccccC.', '..cccccc..', '..cccccc..', '..kkkkkk..'],
-  out:   ['..cccccc..', 'CCccccccaa', 'S.cccccc.s', '..cccccc..', '..cccccc..', '..kkkkkk..'],
+// ---------- The miner: side-on, drawn from a simple skeleton ----------
+// Each pose is a set of joint angles in degrees from straight down, positive swinging forward (he faces right).
+// lt/lk and ft/fk: near and far thigh and knee bend. la/le and fa/fe: near and far upper arm and elbow bend.
+// lean: shoulders forward in art pixels. air: lift off the ground. Poses are drawn once into 40 x 40 art-pixel
+// frames with the feet on row 38 and the body centred on column 17.5, then mirrored for facing left.
+const MF = 40, M_GROUND = 38, M_CX = 17.5;
+const MC = {
+  helmet: '#f2c230', helmetHi: '#ffe27a', helmetLo: '#b88a1a', lamp: '#fff6a0', lampRim: '#c8c8d8',
+  skin: '#f0b890', skinLo: '#c88a68', eye: '#1a1030',
+  coat: '#3aa6a0', coatHi: '#62c8c0', coatLo: '#237570', belt: '#1a1030', buckle: '#d8b040',
+  nearArm: '#4cc0b8', farArm: '#1d6560', nearHand: '#f0b890', farHand: '#b88060',
+  nearLeg: '#5a48a0', farLeg: '#33275f', nearBoot: '#7a5430', farBoot: '#4a3420', outline: '#0a0716',
 };
-const P_LEGS = {
-  stand:   ['..qqpppp..', '..qq..pp..', '..qq..pp..', '..QQ..bb..', '.QQQ..bbb.'],
-  strideA: ['..qqpppp..', '..qq..pp..', '.qq....pp.', '.qq....pp.', 'QQQ....bbb'],
-  passA:   ['..qqpppp..', '...qqpp...', '...qqpp...', '..QQ.pp...', '.....bbb..'],
-  strideB: ['..pppqqq..', '..pp..qq..', '.pp....qq.', '.pp....qq.', 'bbb....QQQ'],
-  passB:   ['..ppppqq..', '...ppqq...', '...ppqq...', '..bb.qq...', '.....QQQ..'],
-  jump:    ['..qqpppp..', '.qqq..ppp.', '.QQ....bb.', 'QQ......bb', '..........'],
-  fall:    ['..qqpppp..', '..qq..pp..', '.qq....pp.', '.qq....pp.', 'QQ......bb'],
+const M_THIGH = 6, M_SHIN = 6, M_UPPER = 5, M_FORE = 5;
+const POSES = {
+  stand:   { lt: 0, lk: 0, ft: 0, fk: 0, la: 4, le: 10, fa: 4, fe: 10, lean: 0 },
+  // Run: airborne stride (1, 4), contact (2, 5), passing (3, 6). Front thigh 36 deg, rear leg 48 deg, arms 72 deg.
+  run1:    { lt: 36, lk: 55, ft: -48, fk: 0, la: -72, le: 15, fa: 72, fe: 15, lean: 2, air: 2 },
+  run2:    { lt: 20, lk: 25, ft: -30, fk: 60, la: -36, le: 40, fa: 36, fe: 40, lean: 2 },
+  run3:    { lt: -6, lk: 20, ft: 28, fk: 80, la: 0, le: 60, fa: 0, fe: 60, lean: 2, air: 1 },
+  run4:    { lt: -48, lk: 0, ft: 36, fk: 55, la: 72, le: 15, fa: -72, fe: 15, lean: 2, air: 2 },
+  run5:    { lt: -30, lk: 60, ft: 20, fk: 25, la: 36, le: 40, fa: -36, fe: 40, lean: 2 },
+  run6:    { lt: 28, lk: 80, ft: -6, fk: 20, la: 0, le: 60, fa: 0, fe: 60, lean: 2, air: 1 },
+  // Jump: take-off, rising, apex (front leg 30 deg, rear 40 deg), falling, landing.
+  takeoff: { lt: 45, lk: 85, ft: 30, fk: 80, la: -60, le: 40, fa: -50, fe: 40, lean: 3 },
+  rising:  { lt: 60, lk: 95, ft: -25, fk: 40, la: 125, le: 35, fa: -40, fe: 30, lean: 1, air: 4 },
+  apex:    { lt: 30, lk: 45, ft: -40, fk: 30, la: 110, le: 25, fa: -60, fe: 25, lean: 1, air: 4 },
+  falling: { lt: 55, lk: 35, ft: -30, fk: 25, la: 100, le: 20, fa: -80, fe: 20, lean: 0, air: 2 },
+  landing: { lt: 40, lk: 80, ft: 25, fk: 75, la: 60, le: 40, fa: 40, fe: 50, lean: 3 },
 };
-// Crouching drops the head and body by a row and bends the knees (4-row legs).
-const CROUCH_LEGS = ['..qqpppp..', '.qq....pp.', '.QQ....bb.', 'QQQ....bbb'];
-const miner = (arms, legs) => P_HEAD.concat(P_ARMS[arms], P_LEGS[legs]);
-const crouch = arms => ['..........'].concat(P_HEAD, P_ARMS[arms], CROUCH_LEGS);
-const PLAYER_A = miner('rest', 'stand');
-const PLAYER_J = miner('up', 'jump');
-const PLAYER_TAKEOFF = crouch('back');   // first frames after the jump key (visual only: the jump starts at once)
-const PLAYER_FALL = miner('out', 'fall');
-const PLAYER_LAND = crouch('rest');
-const TAKEOFF_TICKS = 3, LAND_TICKS = 5;
-// Run cycle: a new pose every RUN_POSE_PX of ground covered, arms swinging opposite to the legs.
-const PLAYER_RUN = [miner('back', 'strideA'), miner('rest', 'passA'), miner('fwd', 'strideB'), miner('rest', 'passB')];
-const RUN_POSE_PX = 9;
-const PCOL = { y: '#f2c230', l: '#fff6a0', s: '#f0b890', S: '#c08868', k: '#1a1030', c: '#3aa6a0', C: '#1d6560', a: '#4cc0b8', b: '#6a4a2a', Q: '#4a3420', p: '#5a48a0', q: '#362a68' };
+const RUN_POSES = ['run1', 'run2', 'run3', 'run4', 'run5', 'run6'];
+const RUN_POSE_PX = 8;                    // a new run pose every 8 game pixels of ground covered
+const TAKEOFF_TICKS = 3, LAND_TICKS = 5;  // visual only: the jump itself starts at once
+const APEX_VY = 1.2;                      // vertical speed below which the jump shows the apex pose
+const mRad = d => d * Math.PI / 180;
+function mDot(g, col, x, y, s) { g.fillStyle = col; g.fillRect(Math.round(x - s / 2), Math.round(y - s / 2), s, s); }
+function mLimb(g, col, x0, y0, x1, y1, s) {
+  const n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) * 2));
+  for (let i = 0; i <= n; i++) mDot(g, col, x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n, s);
+}
+function mLeg(g, hx, hy, thigh, knee, near) {
+  const kx = hx + Math.sin(mRad(thigh)) * M_THIGH, ky = hy + Math.cos(mRad(thigh)) * M_THIGH;
+  const shin = thigh - knee;
+  const fx = kx + Math.sin(mRad(shin)) * M_SHIN, fy = ky + Math.cos(mRad(shin)) * M_SHIN;
+  const col = near ? MC.nearLeg : MC.farLeg;
+  mLimb(g, col, hx, hy, kx, ky, 4);
+  mLimb(g, col, kx, ky, fx, fy, 4);
+  g.fillStyle = near ? MC.nearBoot : MC.farBoot;
+  g.fillRect(Math.round(fx - 2), Math.round(fy - 1), 6, 3);
+}
+function mArm(g, sx, sy, upper, elbow, near) {
+  const ex = sx + Math.sin(mRad(upper)) * M_UPPER, ey = sy + Math.cos(mRad(upper)) * M_UPPER;
+  const fore = upper + elbow;
+  const hx = ex + Math.sin(mRad(fore)) * M_FORE, hy = ey + Math.cos(mRad(fore)) * M_FORE;
+  mLimb(g, near ? MC.nearArm : MC.farArm, sx, sy, ex, ey, 3);
+  mLimb(g, near ? MC.nearArm : MC.farArm, ex, ey, hx, hy, 3);
+  mDot(g, near ? MC.nearHand : MC.farHand, hx, hy, 3);
+}
+function mTorsoHead(g, hx, hy, lean) {
+  for (let i = 0; i < 11; i++) {
+    const off = Math.round(lean * (11 - i) / 11), y = hy - 11 + i;
+    g.fillStyle = MC.coat; g.fillRect(hx - 5 + off, y, 9, 1);
+    g.fillStyle = MC.coatHi; g.fillRect(hx + 2 + off, y, 2, 1);
+    g.fillStyle = MC.coatLo; g.fillRect(hx - 5 + off, y, 2, 1);
+  }
+  g.fillStyle = MC.belt; g.fillRect(hx - 5, hy - 2, 9, 2);
+  g.fillStyle = MC.buckle; g.fillRect(hx + 1, hy - 2, 2, 2);
+  const cx = hx + lean, top = hy - 20;
+  g.fillStyle = MC.skin; g.fillRect(cx - 3, top + 3, 7, 7); g.fillRect(cx + 4, top + 6, 1, 2); g.fillRect(cx - 1, top + 10, 3, 2);
+  g.fillStyle = MC.skinLo; g.fillRect(cx - 3, top + 8, 2, 2); g.fillRect(cx, top + 9, 3, 1);
+  g.fillStyle = MC.eye; g.fillRect(cx + 2, top + 5, 1, 2);
+  g.fillStyle = MC.helmet; g.fillRect(cx - 4, top, 8, 4); g.fillRect(cx - 3, top - 1, 6, 1);
+  g.fillStyle = MC.helmetHi; g.fillRect(cx - 2, top - 1, 3, 1); g.fillRect(cx - 3, top, 2, 1);
+  g.fillStyle = MC.helmetLo; g.fillRect(cx - 5, top + 3, 12, 1);
+  g.fillStyle = MC.lampRim; g.fillRect(cx + 4, top, 2, 3);
+  g.fillStyle = MC.lamp; g.fillRect(cx + 5, top + 1, 1, 1);
+}
+function drawPose(g, p) {
+  const tmp = document.createElement('canvas'); tmp.width = MF; tmp.height = MF;
+  const t = tmp.getContext('2d');
+  const hx = 18, hy0 = 24, lean = p.lean || 0;
+  // Put the lowest foot on the ground (less any lift for airborne poses).
+  const footY = (thigh, knee) => hy0 + Math.cos(mRad(thigh)) * M_THIGH + Math.cos(mRad(thigh - knee)) * M_SHIN + 2;
+  const hy = hy0 + (M_GROUND - Math.max(footY(p.lt, p.lk), footY(p.ft, p.fk))) - (p.air || 0);
+  const sy = hy - 10;
+  mArm(t, hx + lean - 1, sy, p.fa, p.fe, false);
+  mLeg(t, hx - 1, hy, p.ft, p.fk, false);
+  mTorsoHead(t, hx, hy, lean);
+  mLeg(t, hx + 1, hy, p.lt, p.lk, true);
+  mArm(t, hx + lean + 1, sy, p.la, p.le, true);
+  const img = t.getImageData(0, 0, MF, MF).data;
+  const solid = (x, y) => x >= 0 && y >= 0 && x < MF && y < MF && img[(y * MF + x) * 4 + 3] > 0;
+  g.fillStyle = MC.outline;
+  for (let y = 0; y < MF; y++) for (let x = 0; x < MF; x++) {
+    if (!solid(x, y) && (solid(x - 1, y) || solid(x + 1, y) || solid(x, y - 1) || solid(x, y + 1))) g.fillRect(x, y, 1, 1);
+  }
+  g.drawImage(tmp, 0, 0);
+}
+const minerCache = {};
+function minerFrame(name, flip) {
+  const key = name + (flip ? '<' : '>');
+  if (!minerCache[key]) {
+    const cv = document.createElement('canvas'); cv.width = MF; cv.height = MF;
+    const g = cv.getContext('2d');
+    if (flip) { g.translate(MF, 0); g.scale(-1, 1); }
+    drawPose(g, POSES[name]);
+    minerCache[key] = cv;
+  }
+  return minerCache[key];
+}
+// Draws the miner in art pixels with his body centred on x and his feet on y.
+function drawMinerArt(name, x, y, flip) {
+  ctx.drawImage(minerFrame(name, flip), x - (flip ? MF - M_CX : M_CX), y - M_GROUND);
+}
 const SLIME_A = ['...gggg...', '..gggggg..', '.gwkggwkg.', '.gggggggg.', 'gggggggggg', 'gGggGgggGg', 'GGGGGGGGGG'];
 const SLIME_B = ['..........', '...gggg...', '.gggggggg.', 'gwkggggwkg', 'gggggggggg', 'gGggGgggGg', 'GGGGGGGGGG'];
 const SCOL = { g: '#7fd04a', G: '#3f8a2a', w: '#ffffff', k: '#10202a' };
@@ -656,6 +827,7 @@ let frame = 0, stateTimer = 0, banner = 0;
 let score = 0, lives = START_LIVES, levelIdx = 0, newHi = false;
 let run = null, player = null, enemies = [], stals = [], particles = [];
 let oil = 100;
+const lamp = { off: 0, t: 0 };   // off: ticks left in a flicker-out; t: ticks since the oil dropped below LOW_OIL
 let deathReason = '';
 
 function makeRun(def) {
@@ -690,7 +862,9 @@ function resetActors() {
     : { type: 'b', x: e.c * TILE + 1, y0: e.r * TILE + 3, y: e.r * TILE + 3, w: 10, h: 6, vx: 0.8, t: Math.floor(hash(e.c, e.r) * 100) });
   stals = run.stalDefs.map(s => ({ x: s.c * TILE + 2, y: s.r * TILE, w: 8, h: 12, state: 'hang', vy: 0, timer: 0 }));
   oil = 100;
+  lamp.off = 0; lamp.t = 0;
   paused = false;
+  stepCamera(true);
 }
 
 function tileAt(c, r) {
@@ -933,6 +1107,7 @@ function updatePlay() {
   if (cheat && !testMode && pressed.KeyK) { nextLevel(); return; }
   if (banner > 0) banner--;
   updatePlayer();
+  stepCamera(false);
   updateCrumbles();
   updateEnemies();
   updateStalactites();
@@ -943,7 +1118,7 @@ function updatePlay() {
   if (state !== 'play') return;
   if (!cheat) {
     oil -= 100 / (run.def.oil * 60);
-    if (oil < 20 && frame % 60 === 0) SFX.lowOil();
+    updateLamp();
     if (oil <= 0) { oil = 0; die('Your lamp burned out.'); }
   }
 }
@@ -975,7 +1150,23 @@ function updateEnd() {
 }
 
 // ---------- Rendering: play ----------
-function lightRadius() { return 30 + 80 * (oil / 100) + Math.sin(frame * 0.3) * 1.2; }
+// The lamp light shrinks steadily from full size to LAMP_MIN of it as the oil falls to LOW_OIL, then holds.
+const LAMP_FULL = 110, LAMP_MIN = 0.4, LOW_OIL = 20;
+function lightRadius() {
+  const k = oil >= LOW_OIL ? LAMP_MIN + (1 - LAMP_MIN) * (oil - LOW_OIL) / (100 - LOW_OIL) : LAMP_MIN;
+  return LAMP_FULL * k + Math.sin(frame * 0.3) * 1.2;
+}
+// Below LOW_OIL the lamp sputters out every 3 seconds. Each blackout lasts from 0.1 s, growing to 0.6 s
+// as the oil runs out. Sparkles, the open exit and other glowing things stay visible.
+const FLICKER_EVERY = 180, FLICKER_MIN = 6, FLICKER_MAX = 36;
+function updateLamp() {
+  if (lamp.off > 0) lamp.off--;
+  if (oil >= LOW_OIL) { lamp.t = 0; return; }
+  if (lamp.t++ % FLICKER_EVERY === 0) {
+    lamp.off = Math.round(FLICKER_MIN + (FLICKER_MAX - FLICKER_MIN) * (1 - oil / LOW_OIL));
+    SFX.sputter();
+  }
+}
 // The darkness layer is drawn at full screen resolution so the edge of the lamp light moves smoothly.
 const dark = document.createElement('canvas');
 const dctx = dark.getContext('2d');
@@ -991,6 +1182,7 @@ const lerpY = o => (o.py === undefined ? o.y : o.py + (o.y - o.py) * renderAlpha
 function savePrevPositions() {
   if (!run || !player) return;
   player.px = player.x; player.py = player.y;
+  cam.pwx = cam.wx; cam.pwy = cam.wy;
   for (const e of enemies) { e.px = e.x; e.py = e.y; }
   for (const s of stals) { s.px = s.x; s.py = s.y; }
 }
@@ -1003,11 +1195,23 @@ function punchLight(x, y, r, strength) {
   dctx.fillRect(x - r, y - r, r * 2, r * 2);
 }
 // The camera follows the miner and stops at the cavern's edges. With a screen-sized cavern it stays at 0,0.
-const cam = { x: 0, y: 0 };
-function updateCamera() {
+// The miner moves freely inside a box around the middle of the screen; once he pushes past its edge
+// the view eases after him. It runs on game ticks (wx, wy) and is blended between ticks when drawn (x, y).
+const CAM_BOX_X = 40, CAM_BOX_Y = 24, CAM_EASE_X = 0.12, CAM_EASE_Y = 0.18;
+const cam = { x: 0, y: 0, wx: 0, wy: 0, pwx: 0, pwy: 0, tx: 0, ty: 0 };
+function stepCamera(instant) {
   const maxX = Math.max(0, run.cols * TILE - VW), maxY = Math.max(0, run.rows * TILE - PLAY_H);
-  cam.x = snap(clamp(lerpX(player) + P_W / 2 - VW / 2, 0, maxX));
-  cam.y = snap(clamp(lerpY(player) + P_H / 2 - PLAY_H / 2, 0, maxY));
+  const cx = player.x + P_W / 2 - VW / 2, cy = player.y + P_H / 2 - PLAY_H / 2;
+  if (instant) { cam.tx = cx; cam.ty = cy; }
+  cam.tx = clamp(clamp(cam.tx, cx - CAM_BOX_X, cx + CAM_BOX_X), 0, maxX);
+  cam.ty = clamp(clamp(cam.ty, cy - CAM_BOX_Y, cy + CAM_BOX_Y), 0, maxY);
+  if (instant) { cam.wx = cam.pwx = cam.tx; cam.wy = cam.pwy = cam.ty; return; }
+  cam.wx += (cam.tx - cam.wx) * CAM_EASE_X;
+  cam.wy += (cam.ty - cam.wy) * CAM_EASE_Y;
+}
+function updateCamera() {
+  cam.x = snap(cam.pwx + (cam.wx - cam.pwx) * renderAlpha);
+  cam.y = snap(cam.pwy + (cam.wy - cam.pwy) * renderAlpha);
 }
 function worldView(fn) {
   ctx.save();
@@ -1028,7 +1232,7 @@ function drawDarkness() {
   dctx.translate(-cam.x, -cam.y);
   const plx = lerpX(player), ply = lerpY(player);
   if (state !== 'dying') {
-    punchLight(plx + (player.face > 0 ? P_W : 0), ply + 3, lightRadius(), 1);
+    if (!lamp.off) punchLight(plx + (player.face > 0 ? P_W : 0), ply + 3, lightRadius(), 1);
   } else {
     punchLight(plx + P_W / 2, ply + P_H / 2, 40 * (stateTimer / 70), 1);
   }
@@ -1068,11 +1272,11 @@ function drawWorldBase() {
     }
     if (state === 'play' || state === 'clear') {
       const p = player;
-      const frameMap = !p.onGround
-        ? (p.takeoff > 0 ? PLAYER_TAKEOFF : p.vy < 0 ? PLAYER_J : PLAYER_FALL)
-        : p.land > 0 ? PLAYER_LAND
-        : p.moving ? PLAYER_RUN[Math.floor(p.dist / RUN_POSE_PX) % PLAYER_RUN.length] : PLAYER_A;
-      drawSpriteArt(frameMap, PCOL, (snap(lerpX(p)) - 1) * ART, snap(lerpY(p)) * ART, p.face < 0);
+      const pose = !p.onGround
+        ? (p.takeoff > 0 ? 'takeoff' : p.vy < -APEX_VY ? 'rising' : p.vy <= APEX_VY ? 'apex' : 'falling')
+        : p.land > 0 ? 'landing'
+        : p.moving ? RUN_POSES[Math.floor(p.dist / RUN_POSE_PX) % RUN_POSES.length] : 'stand';
+      drawMinerArt(pose, snap(lerpX(p) + P_W / 2) * ART, snap(lerpY(p) + P_H) * ART, p.face < 0);
     }
     for (const q of particles) px(ctx, q.col, snap(q.x) * ART, snap(q.y) * ART, 2, 2);
   });
@@ -1230,7 +1434,7 @@ function edMsg(m) { ed.msg = m; ed.msgT = 240; }
 function edSet(c, r, ch) {
   if (c < 0 || c >= COLS || r < 0 || r >= ROWS || ed.grid[r][c] === ch) return;
   if (ch === 'P' || ch === 'E') {
-    for (const row of ed.grid) for (let i = 0; i < COLS; i++) if (row[i] === ch) row[i] = '.';
+    for (const row of ed.grid) for (let i = 0; i < row.length; i++) if (row[i] === ch) row[i] = '.';
   }
   ed.grid[r][c] = ch;
   ed.dirty = true; ed.staticCanvas = null;
@@ -1400,7 +1604,7 @@ function drawCellArt(ch, x, y, t) {
     case 'o': drawOil(ctx, X + 4, Y + 4); break;
     case 's': drawSpriteArt(SLIME_A, SCOL, X + 2, Y + 10, false); break;
     case 'b': drawSpriteArt(BAT_A, BCOL, X + 2, Y + 6, false); break;
-    case 'P': drawSpriteArt(PLAYER_A, PCOL, X + 2, Y - 12, false); break;
+    case 'P': drawMinerArt('stand', X + 12, Y + 24, false); break;
     case 'E': drawExit(ctx, X, Y - AT, true, t); break;
   }
 }
@@ -1408,13 +1612,14 @@ function drawTileIcon(ch, x, y, t) {
   if ('#B-^'.includes(ch)) { ctx.drawImage(tileIcon(ch), 0, AT, AT, AT, x, y + (ch === '-' ? 3 : 0), TILE, TILE); return; }
   if (ch === '.') { px(ctx, '#ff5a6a', x + 2, y + 5, 8, 2); px(ctx, '#ffffff', x + 2, y + 5, 3, 2); return; }
   if (ch === 'E') { ctx.save(); ctx.translate(x + 3, y); ctx.scale(0.25, 0.25); drawExit(ctx, 0, 0, true, t); ctx.restore(); return; }
-  if (ch === 'P') { artView(() => drawSpriteArt(PLAYER_A, PCOL, x * ART + 2, y * ART - 12, false)); return; }
+  if (ch === 'P') { artView(() => drawMinerArt('stand', x * ART + 12, y * ART + 24, false)); return; }
   artView(() => drawCellArt(ch, x, ch === '~' ? y + 3 : y, t));
 }
 function drawEditor() {
   if (!ed.staticCanvas) ed.staticCanvas = renderStatic(ed.grid);
   ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(ed.staticCanvas, 0, 0, VW, PLAY_H);
+  // Larger caverns: the editor shows only their top-left screen for now.
+  ctx.drawImage(ed.staticCanvas, 0, 0, ed.grid[0].length * TILE, ed.grid.length * TILE);
   artView(() => {
     for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) drawCellArt(ed.grid[r][c], c * TILE, r * TILE, frame + c * 7);
   });
