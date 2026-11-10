@@ -59,11 +59,27 @@ function hash(a, b, s = 0) {
 //    A solid bar runs under the belt, so unlike a ledge you can't jump up through one)
 // *  sparkle        o  oil flask          P  player start
 // E  exit: sits in the cavern's outer wall, roof or floor, and opens once every sparkle is collected
+// (  open belt moving left   )  open belt moving right (a conveyor with no bar under it: you can jump up through one)
+// C  crumbling block (full square: holds you up from above, collapses if you stand on it; walk or jump through it)
 // s  slime          b  bat
-const VALID_CHARS = '.#B-~<>^v*oEPsb';
+// y  small spider   Y  large spider (two squares wide, placed by its left square). Spiders hang on a thread
+//    from the square above and drop to the first ledge or floor below, then climb back up.
+// f  flying monster (flies 25% faster than a bat, bobbing between its row and the row above; comes for
+//    the miner when he is within a square of it; a falling stalactite kills it)
+// m  mushroom creature (two squares tall, placed by its feet; walks the ledges slowly like a slime)
+// D  demon boss     L  skeleton lord (bosses: two squares wide and three tall, placed by the bottom-left square.
+//    The demon throws a fireball along its row every 3 seconds; the skeleton lord lunges with its scythe when
+//    the miner is on its level and close. Three hits from falling stalactites defeat either one.)
+// h  flying head (two squares wide, placed by its left square; flies like a bat, and moves up to a square up
+//    or down to line up with the miner when he is within 2 squares of it)
+// V  regrowing stalactite (like v, but a new one grows back 2 seconds after the last one shattered)
+const VALID_CHARS = '.#B-~<>()C^vV*oEPsbyYfmDLh';
 const isSolidCh = ch => ch === '#' || ch === 'B';
-const isOneWayCh = ch => ch === '-' || ch === '~' || ch === '<' || ch === '>';
-const isConveyorCh = ch => ch === '<' || ch === '>';
+const isOneWayCh = ch => ch === '-' || ch === '~' || ch === 'C' || ch === '<' || ch === '>' || ch === '(' || ch === ')';
+const isConveyorCh = ch => ch === '<' || ch === '>' || ch === '(' || ch === ')';
+const isBarConveyorCh = ch => ch === '<' || ch === '>';   // conveyors with the solid bar underneath
+const isCrumbleCh = ch => ch === '~' || ch === 'C';
+const beltDir = ch => (ch === '>' || ch === ')') ? 1 : -1;
 const CONVEYOR = 0.7;   // how fast a conveyor carries the miner, in pixels per tick (running is 1.4)
 
 // Caverns join up into one mine. The exit's place on the edge says how you leave and how you arrive next:
@@ -694,15 +710,36 @@ function drawCrumble(g, x, y, stage) {
   crack(16, stage > 0.4 ? 2 : 1);
   if (stage > 0.7) { px(g, '#05050f', x + 10, y, 3, 4); px(g, '#05050f', x + 20, y + 5, 3, 5); }
 }
+// Crumbling block: a full square of the crumbling ledge's stone. Cracks spread and chunks fall away as it goes.
+function drawCrumbleBlock(g, x, y, stage) {
+  const base = ['#c09ad8', '#9a74b6', '#7a5898', '#6e4c8c', '#634282', '#573876', '#4a2f68', '#3c2556', '#2c1a42', '#1c0f2c'];
+  for (let i = 0; i < AT; i++) px(g, base[Math.min(base.length - 1, Math.floor(i * base.length / AT))], x, y + i, AT, 1);
+  // Mortar lines split it into four loose stones.
+  px(g, '#1c0f2c', x, y + 11, AT, 1); px(g, '#9a74b6', x, y + 12, AT, 1);
+  px(g, '#1c0f2c', x + 13, y + 1, 1, 10); px(g, '#1c0f2c', x + 6, y + 13, 1, 10);
+  px(g, '#1c0f2c', x, y + AT - 1, AT, 1); px(g, '#1c0f2c', x + AT - 1, y, 1, AT);
+  const crack = (cx, cy, wide) => {
+    const path = [0, 1, 1, 0, -1, -1, 0, 1, 0, 0];
+    path.forEach((o, i) => { px(g, '#140a20', x + cx + o, y + cy + i, wide, 1); px(g, '#b08ac8', x + cx + o + wide, y + cy + i, 1, 1); });
+  };
+  crack(5, 1, stage > 0.4 ? 2 : 1);
+  crack(18, 13, stage > 0.4 ? 2 : 1);
+  if (stage > 0.2) crack(17, 1, 1);
+  if (stage > 0.5) crack(10, 13, 1);
+  if (stage > 0.7) { px(g, '#05050f', x + 8, y, 4, 5); px(g, '#05050f', x + 19, y + 6, 4, 5); px(g, '#05050f', x + 2, y + 16, 4, 6); px(g, '#05050f', x + 14, y + 19, 5, 5); }
+}
 // Conveyor: a belt on rollers, as tall as a ledge, with chevrons that run the way it carries you (dir -1 or 1).
-function drawConveyor(g, x, y, dir, t) {
-  // The solid bar under the belt, on brackets at each roller: you can't jump up through it.
-  for (const bx of [2, AT - 4]) px(g, '#3a3f5c', x + bx, y + 10, 2, 4);
-  px(g, '#1a1030', x, y + 13, AT, 10);
-  px(g, '#6a7090', x, y + 14, AT, 1);
-  px(g, '#3a3f5c', x, y + 15, AT, 6);
-  px(g, '#24283e', x, y + 21, AT, 1);
-  for (let k = 3; k < AT; k += 6) px(g, '#8890b0', x + k, y + 17, 1, 1);
+// A barred conveyor has a solid bar underneath; an open belt has none, so you can jump up through it.
+function drawConveyor(g, x, y, dir, t, bar = true) {
+  if (bar) {
+    // The solid bar under the belt, on brackets at each roller: you can't jump up through it.
+    for (const bx of [2, AT - 4]) px(g, '#3a3f5c', x + bx, y + 10, 2, 4);
+    px(g, '#1a1030', x, y + 13, AT, 10);
+    px(g, '#6a7090', x, y + 14, AT, 1);
+    px(g, '#3a3f5c', x, y + 15, AT, 6);
+    px(g, '#24283e', x, y + 21, AT, 1);
+    for (let k = 3; k < AT; k += 6) px(g, '#8890b0', x + k, y + 17, 1, 1);
+  }
   px(g, '#1a1030', x, y, AT, 10);
   px(g, '#8890b0', x, y, AT, 2);
   px(g, '#4a4f70', x, y + 2, AT, 1);
@@ -719,6 +756,20 @@ function drawConveyor(g, x, y, dir, t) {
   const rot = Math.floor(t / 4) % 2;
   for (const rx of [1, AT - 5]) { px(g, '#5c9ff0', x + rx, y + 3, 4, 4); px(g, '#0a1a3e', x + rx + 1 + rot, y + 4 + rot, 1, 1); }
 }
+// The demon's fireball, in art pixels: a hot core with a flickering tail behind it.
+function drawFireball(g, x, y, t, vx) {
+  const back = vx > 0 ? -1 : 1, flick = Math.floor(t / 3) % 2;
+  px(g, '#ff4a1a', x + 2 + back * 4, y + 1 + flick, 8, 6 - flick * 2);
+  px(g, '#ff8a2a', x + 1, y, 10, 8);
+  px(g, '#ffd040', x + 3, y + 2, 6, 4);
+  px(g, '#fff4c0', x + 5, y + 3, 2, 2);
+}
+// A spider on its silk thread. (x, top, y) in art pixels: its left edge, where the thread is tied, and its top.
+function drawSpider(g, type, x, top, y, frameB) {
+  const S = SPIDER[type], cx = x + S.w - 1, thick = type === 'Y' ? 2 : 1;
+  if (y > top) { g.fillStyle = 'rgba(220,220,240,0.55)'; g.fillRect(cx, top, thick, y - top + 4); }
+  drawSpriteArt(S.art[frameB], SPCOL, x, y, false);
+}
 function drawSpikes(g, x, y) {
   const shards = [[1, 6, 13], [6, 7, 19], [12, 6, 15], [17, 7, 18]];
   for (const [sx, w, h] of shards) {
@@ -733,16 +784,20 @@ function drawSpikes(g, x, y) {
   }
   px(g, '#1d3c7a', x, y + AT - 1, AT, 1);
 }
-function drawStalactite(g, x, y) {
-  for (let i = 0; i < 24; i++) {
-    const w = Math.max(1, Math.round(16 * Math.pow(1 - i / 24, 0.8)));
+// A regrowing stalactite is drawn in teal crystal; grown (0 to 1) shows how much of it has grown back.
+const STAL_COL = { false: ['#3a2f80', '#7a6ad8', '#251d55', '#a898ff'], true: ['#1f6a78', '#5fd0d8', '#123a48', '#b0fff4'] };
+function drawStalactite(g, x, y, regrow = false, grown = 1) {
+  const [body, lit, dark, tip] = STAL_COL[regrow];
+  const len = Math.max(2, Math.round(24 * grown));
+  for (let i = 0; i < len; i++) {
+    const w = Math.max(1, Math.round(16 * Math.pow(1 - (i + 24 - len) / 24, 0.8)));
     const ox = x + Math.floor((16 - w) / 2);
-    px(g, '#3a2f80', ox, y + i, w, 1);
-    px(g, '#7a6ad8', ox, y + i, Math.max(1, Math.floor(w / 4)), 1);
-    if (w > 3) px(g, '#251d55', ox + w - 2, y + i, 2, 1);
+    px(g, body, ox, y + i, w, 1);
+    px(g, lit, ox, y + i, Math.max(1, Math.floor(w / 4)), 1);
+    if (w > 3) px(g, dark, ox + w - 2, y + i, 2, 1);
   }
-  px(g, '#251d55', x, y, 16, 2);
-  px(g, '#a898ff', x + 7, y + 22, 1, 2);
+  px(g, dark, x, y, 16, 2);
+  if (grown >= 1) px(g, tip, x + 7, y + 22, 1, 2);
 }
 function drawSparkle(g, cx, cy, t) {
   const a = 6 + (Math.floor(t / 10) % 4 === 0 ? 2 : 0);
@@ -1003,6 +1058,44 @@ const SCOL = { g: '#7fd04a', G: '#3f8a2a', w: '#ffffff', k: '#10202a' };
 const BAT_A = ['m........m', 'mm..MM..mm', '.mmMrrMmm.', '..mMMMMm..', '...M..M...', '..........'];
 const BAT_B = ['..........', '....MM....', '...MrrM...', '.mmMMMMmm.', 'mm.M..M.mm', 'm........m'];
 const BCOL = { m: '#7a5ab8', M: '#3a2a6a', r: '#ff4a5a' };
+const SPIDER_A = ['.l......l.', 'l.l.hh.l.l', '..lhKKhl..', '.llKrrKll.', 'l.lKKKKl.l', '..lKKKKl..', '.l.lhhl.l.', 'l........l'];
+const SPIDER_B = ['..........', '.l..hh..l.', 'l.lhKKhl.l', '..lKrrKl..', '.llKKKKll.', 'l.lKKKKl.l', '..l.hh.l..', '.l.l..l.l.'];
+const BIGSPIDER_A = ['..l................l..', '.l.l..............l.l.', 'l...l...hhhhhh...l...l', '....l..hKKKKKKh..l....', '...l..lhKKKKKKhl..l...', '..l..l.KKrKKrKK.l..l..', '.l..l.lKKKKKKKKl.l..l.', 'l..l..lKKKKKKKKl..l..l', '..l..l..hKKKKh..l..l..', '.l..l....hhhh....l..l.', 'l..l..............l..l', '......................'];
+const BIGSPIDER_B = ['......................', '..l................l..', '.l.l....hhhhhh....l.l.', 'l...l..hKKKKKKh..l...l', '....l..hKKKKKKh..l....', '...l..lKKrKKrKKl..l...', '..l..l.KKKKKKKK.l..l..', '.l..l.lKKKKKKKKl.l..l.', 'l..l..l.hKKKKh.l..l..l', '..l..l...hhhh...l..l..', '.l..l............l..l.', 'l..l..............l..l'];
+const SPCOL = { l: '#c8b8dc', K: '#5e4a7a', h: '#a08ac0', r: '#ff4a5a' };
+// Small and large spiders: size in game pixels, how fast they drop and climb, and how long they wait at each end.
+const SPIDER = { y: { w: 10, h: 8, v: 0.8, waitBottom: 30, waitTop: 50, art: [SPIDER_A, SPIDER_B] },
+                 Y: { w: 22, h: 12, v: 0.5, waitBottom: 45, waitTop: 70, art: [BIGSPIDER_A, BIGSPIDER_B] } };
+const isSpiderCh = ch => ch === 'y' || ch === 'Y';
+const FLYER_A = ['.y........y.', '.oy......yo.', '..o.gggg.o..', 'w..gGGGGg..w', 'ww.gEEEEg.ww', 'wwwgEkkEgwww', '.wwgEEEEgww.', '..wgGGGGgw..', '...gGGGGg...', '...g.gg.g...', '..g......g..'];
+const FLYER_B = ['wy........yw', 'woy......yow', 'w.o.gggg.o.w', 'w..gGGGGg..w', '...gEEEEg...', '...gEkkEg...', '...gEEEEg...', '...gGGGGg...', '...gGGGGg...', '...g.gg.g...', '..g......g..'];
+const FCOL = { g: '#6fd05a', G: '#3f8a2a', w: '#2a6a3a', E: '#f4fff0', k: '#10202a', o: '#ff8a2a', y: '#ffd040' };
+const SHROOM_A = ['....pppp....', '..pppppppp..', '.ppsPppPspp.', 'pppppssppppp', 'pPppppppppPp', 'PPPPPPPPPPPP', '...bbbbbb...', '..bbkbbkbb..', '..bbbbbbbb..', '.bbbbbbbbbb.', 'bbbbbbbbbbbb', 'bBbbbbbbbbBb', 'bBbbbbbbbbBb', 'bBbbbbbbbbBb', 'bBbbbbbbbbBb', '.BbbbbbbbbB.', '.BBbbbbbbBB.', '..BBbbbbBB..', '..BbbBBbbB..', '..Bb....bB..', '..Bb....bB..', '.BBb....bBB.'];
+const SHROOM_B = ['....pppp....', '..pppppppp..', '.ppsPppPspp.', 'pppppssppppp', 'pPppppppppPp', 'PPPPPPPPPPPP', '...bbbbbb...', '..bbkbbkbb..', '..bbbbbbbb..', '.bbbbbbbbbb.', 'bbbbbbbbbbbb', 'bBbbbbbbbbBb', 'bBbbbbbbbbBb', 'bBbbbbbbbbBb', 'bBbbbbbbbbBb', '.BbbbbbbbbB.', '.BBbbbbbbBB.', '..BBbbbbBB..', '..BbbBBbbB..', '...bB..Bb...', '...bB..Bb...', '..bBB..BBb..'];
+const MCOL = { p: '#a070c0', P: '#6a4090', s: '#efe0ff', b: '#d8dcec', B: '#9aa0b8', k: '#20182a' };
+const DEMON_A = ['H......................H', 'HH....................HH', '.HH..................HH.', '..HH.....rrrrrr.....HH..', '...HHH.rRRRRRRRRr.HHH...', '.....HHRRRRRRRRRRHH.....', '......RReRRRRRReRR......', '......RRRRRRRRRRRR......', '......rBRRRRRRRRBr......', 'WW....rBBBBBBBBBBr....WW', 'WWW...RBBBBBBBBBBR...WWW', 'wWWW.RRRBBBBBBBBRRR.WWWw', 'wwWWRRRRRBBBBBBRRRRRWWww', 'wwWRRRRRRRBBBBRRRRRRRWww', 'wwWRRrRRRRRBBRRRRRrRRWww', 'w.WRR.RRRrRRRRrRRR.RRW.w', 'w.WRR.RRRRRRRRRRRR.RRW.w', '..WRR.RrRRRRRRRRrR.RRW..', '...RR.RRRRRRRRRRRR.RR...', '..kkk.llllllllllll.Rr...', '...SF.LLLLLLLLLLLL.RR...', '..SFf.LLLLLLLLLLLL......', '..SFf.LLLLLLLLLLLL......', '.SFf...LLLLLLLLLL.......', '.SFf..RR.LLLLLL.RR......', 'SFf...RR..LLLL..RR......', 'SFf...RR........RR......', 'Ff...RRr........rRR.....', 'ff...RR..........RR.....', '.....RR..........RR.....', '.....Rr..........rR.....', '....RRr..........rRR....', '...RRRr..........rRRR...', '...kkkk..........kkkk...'];
+const DEMON_B = ['H......................H', 'HH....................HH', '.HH..................HH.', '..HH.....rrrrrr.....HH..', '...HHH.rRRRRRRRRr.HHH...', '.....HHRRRRRRRRRRHH.....', '......RReRRRRRReRR......', '......RRRRRRRRRRRR......', '......rBRRRRRRRRBr......', 'WW....rBBBBBBBBBBr....WW', 'WWW...RBBBBBBBBBBR...WWW', 'wWWW.RRRBBBBBBBBRRR.WWWw', 'wwWWRRRRRBBBBBBRRRRRWWww', 'wwWRRRRRRRBBBBRRRRRRRWww', 'wwWRRrRRRRRBBRRRRRrRRWww', 'w.WRR.RRRrRRRRrRRR.RRW.w', 'w.WRR.RRRRRRRRRRRR.RRW.w', '..WRR.RrRRRRRRRRrR.RRW..', '...RR.RRRRRRRRRRRR.RR...', '..kkk.llllllllllll.Rr...', '...Sf.LLLLLLLLLLLL.RR...', '..SfF.LLLLLLLLLLLL......', '..SfF.LLLLLLLLLLLL......', '.SfF...LLLLLLLLLL.......', '.SfF..RR.LLLLLL.RR......', 'SfF...RR..LLLL..RR......', 'SfF...RR........RR......', 'fF...RRr........rRR.....', 'FF...RR..........RR.....', '.....RR..........RR.....', '.....Rr..........rR.....', '....RRr..........rRR....', '...RRRr..........rRRR...', '...kkkk..........kkkk...'];
+const LORD_A = ['........hhhhhhhh........', '......hhhhhhhhhhhh......', '......hHkkkkkkkkHh......', '.....hHkkkkkkkkkkHh.....', '.....hHkkkoeeokkkHh.....', '.....hHkkkkeekkkkHh.....', '.....hHkkkkkkkkkkHh.....', '....hhHhkkkkkkkkhHhh....', '...hhHHhhhkkkkhhhHHhh...', '..hhbbHhhhhhhhhhhHbbhh..', '.hhbbbBhhBhhhhBhhBbbbhh.', '.hbbBbbhBbbhhbbBhbbBbbh.', '..bb.hhbbbbhhbbbbhh.bb..', '..bb.hbBbBbhhbBbBbh.bb..', '.ggb.hbbbbbhhbbbbbh.bgC.', '.gbb.hbBbBbhhbBbBbh.bbC.', '.bbB.hbbbbbhhbbbbbh.BbC.', 'bbb..hhbbbhhhhbbbhh..bCb', 'bb...hhhhhhhhhhhhhh...Cb', 'gg...hhBBBBBBBBBBhh...Cg', '.....hhhhhhhhhhhhhh...C.', '.....hbbhhhhhhhhbbh...C.', '.....hbbh......hbbh...C.', '.....hbB........Bbh...C.', '......bB........Bb....C.', '......gg........gg....C.', '......bB........Bb....C.', '......bB........Bb....C.', '.....ggb........bgg...C.', '.....bB..........Bb..cC.', '.....bB......c...Bccc...', '....gbB.......c.cccc....', '....bbB........cccbb....', '...bbbb..........bbbb...'];
+const LORD_B = ['........hhhhhhhh........', '......hhhhhhhhhhhh......', '......hHkkkkkkkkHh......', '.....hHkkkkkkkkkkHh.....', '.....hHkkkeooekkkHh.....', '.....hHkkkkeekkkkHh.....', '.....hHkkkkkkkkkkHh.....', '....hhHhkkkkkkkkhHhh....', '...hhHHhhhkkkkhhhHHhh...', '..hhbbHhhhhhhhhhhHbbhh..', '.hhbbbBhhBhhhhBhhBbbbhh.', '.hbbBbbhBbbhhbbBhbbBbbh.', '..bb.hhbbbbhhbbbbhh.bb..', '..bb.hbBbBbhhbBbBbh.bb..', '.ggb.hbbbbbhhbbbbbh.bgC.', '.gbb.hbBbBbhhbBbBbh.bbC.', '.bbB.hbbbbbhhbbbbbh.BbC.', 'bbb..hhbbbhhhhbbbhh..bCb', 'bb...hhhhhhhhhhhhhh...Cb', 'gg...hhBBBBBBBBBBhh...Cg', '.....hhhhhhhhhhhhhh...C.', '.....hbbhhhhhhhhbbh...C.', '.....hbbh......hbbh...C.', '.....hbB........Bbh...C.', '......bB........Bb....C.', '......gg........gg....C.', '......bB........Bb....C.', '......bB........Bb....C.', '.....ggb........bgg...C.', '.....bB..........Bb..cC.', '.....bB......c...Bccc...', '....gbB.......c.cccc....', '....bbB........cccbb....', '...bbbb..........bbbb...'];
+const DCOL = { H: '#2a2030', R: '#d0303a', r: '#8a1a2a', e: '#ffe040', B: '#e8e8f0', W: '#3a3048', w: '#5a4a6a',
+               L: '#3a4a7a', l: '#c8c8d0', S: '#d8e0f0', F: '#ff8a2a', f: '#ffd040', k: '#10101a' };
+const LCOL = { h: '#2a2040', H: '#4a3a68', k: '#0a0812', e: '#ff5040', o: '#ffb040', b: '#a070c8', B: '#6a4090',
+               g: '#c09060', c: '#e8f0f8', C: '#8890a0' };
+const HEAD_A = ['H......................H', 'HH....................HH', '.HH..................HH.', '..HHH..............HHH..', '...HHHH...rrrr...HHHH...', '....HHHHrRRRRRRrHHHH....', '..o...rRRRRRRRRRRr...o..', '..O...RReRRRRRReRR...O..', '.....rRRRRRRRRRRRRr.....', '......RRkRRkkRRkRR......', '.......rRRRRRRRRr.......', '.........rrrrrr.........'];
+const HEAD_B = ['H......................H', 'HH....................HH', '.HH..................HH.', '..HHH..............HHH..', '...HHHH...rrrr...HHHH...', '....HHHHrRRRRRRrHHHH....', '..O...rRRRRRRRRRRr...O..', '..o...RReRRRRRReRR...o..', '.....rRRRRRRRRRRRRr.....', '......RRkRRkkRRkRR......', '.......rRRRRRRRRr.......', '.........rrrrrr.........'];
+const HCOL = { H: '#2a2030', R: '#c8303a', r: '#7a1a2a', e: '#ffe040', k: '#10101a', o: '#c8c8d0', O: '#8890a0' };
+const HEAD_V = 0.8, HEAD_RANGE = 2 * TILE;
+// The head's art with either horn snapped off: HEAD_ART[frame][left horn ? 1 : 0][right horn ? 1 : 0].
+const dropHorn = (map, side) => map.map(r => r.split('').map((ch, i) => ch === 'H' && (side < 0 ? i < r.length / 2 : i >= r.length / 2) ? '.' : ch).join(''));
+const HEAD_ART = [HEAD_A, HEAD_B].map(m => [[dropHorn(dropHorn(m, -1), 1), dropHorn(m, -1)], [dropHorn(m, 1), m]]);
+const OIL_POINTS = 20;   // score for each percent of lamp oil left at the exit (was 5)
+const REGROW_T = 120, GROW_T = 20;   // a regrowing stalactite returns 2 seconds after it shatters, growing for 1/3 s
+const isBossCh = ch => ch === 'D' || ch === 'L';
+const BOSS_HP = 3, BOSS_SCORE = 5000;
+const FIRE_EVERY = 180, FIRE_V = 1.6;              // the demon's fireball: every 3 seconds, along its row
+const LUNGE_RANGE = 4 * TILE, LUNGE_V = 2.2, LUNGE_T = 30, LUNGE_REST = 60;
+const FLYER_V = 0.8 * 1.25;   // a bat flies at 0.8; the monster is 25% faster
+const FLYER_CHASE = TILE;     // it comes for the miner when he is within this many pixels of it
 
 function scale2x(map) {
   const h = map.length, w = map[0].length;
@@ -1101,7 +1194,7 @@ let testMode = false, testDef = null;
 let frame = 0, stateTimer = 0, banner = 0;
 let score = 0, lives = START_LIVES, levelIdx = 0, newHi = false;
 let nextLifeAt = EXTRA_LIFE_FIRST, livesFlash = 0;
-let run = null, player = null, enemies = [], stals = [], particles = [];
+let run = null, player = null, enemies = [], stals = [], particles = [], shots = [];
 let oil = 100;
 const lamp = { off: 0, t: 0 };   // off: ticks left in a flicker-out; t: ticks since the oil dropped below LOW_OIL
 let deathReason = '';
@@ -1117,8 +1210,8 @@ function makeRun(def) {
     else if (ch === 'o') R.oils.push({ c, r, taken: false });
     else if (ch === 'E') { R.exit = { c, r }; base[r][c] = '#'; continue; }   // the exit is set into solid rock
     else if (ch === 'P') R.start = { c, r };
-    else if (ch === 's' || ch === 'b') R.enemyDefs.push({ type: ch, c, r });
-    else if (ch === 'v') R.stalDefs.push({ c, r });
+    else if ('sbfmDLh'.includes(ch) || isSpiderCh(ch)) R.enemyDefs.push({ type: ch, c, r });
+    else if (ch === 'v' || ch === 'V') R.stalDefs.push({ c, r, regrow: ch === 'V' });
     else continue;
     base[r][c] = '.';
   }
@@ -1142,10 +1235,23 @@ function resetActors() {
   else if (e === 'bottom') { player.onGround = false; player.vy = JUMP_V; player.takeoff = TAKEOFF_TICKS; player.safeFall = true; }
   player.peakY = player.y;
   player.lampX = player.face * LAMP_X;
-  enemies = run.enemyDefs.map(e => e.type === 's'
-    ? { type: 's', x: e.c * TILE + 1, y: (e.r + 1) * TILE - 7, w: 10, h: 7, vx: 0.45, anim: 0 }
-    : { type: 'b', x: e.c * TILE + 1, y0: e.r * TILE + 3, y: e.r * TILE + 3, w: 10, h: 6, vx: 0.8, t: Math.floor(hash(e.c, e.r) * 100) });
-  stals = run.stalDefs.map(s => ({ x: s.c * TILE + 2, y: s.r * TILE, w: 8, h: 12, state: 'hang', vy: 0, timer: 0 }));
+  enemies = run.enemyDefs.map(e => {
+    if (e.type === 's') return { type: 's', x: e.c * TILE + 1, y: (e.r + 1) * TILE - 7, w: 10, h: 7, vx: 0.45, anim: 0 };
+    if (e.type === 'h') return { type: 'h', x: e.c * TILE, y0: e.r * TILE, y: e.r * TILE, w: 24, h: 12, vx: HEAD_V, t: 0, hornL: true, hornR: true };
+    if (isBossCh(e.type)) return { type: e.type, x: e.c * TILE, y: (e.r + 1) * TILE - 34, w: 24, h: 34,
+                                   vx: e.type === 'D' ? 0.35 : 0.3, hp: BOSS_HP, flash: 0, anim: 0, mode: 'walk', timer: FIRE_EVERY, attack: 0 };
+    if (e.type === 'm') return { type: 'm', x: e.c * TILE, y: (e.r + 1) * TILE - 22, w: 12, h: 22, vx: 0.3, anim: 0 };
+    if (e.type === 'b') return { type: 'b', x: e.c * TILE + 1, y0: e.r * TILE + 3, y: e.r * TILE + 3, w: 10, h: 6, vx: 0.8, t: Math.floor(hash(e.c, e.r) * 100) };
+    // The flying monster bobs between the bottom of its own row and the top of the row above.
+    if (e.type === 'f') return { type: 'f', x: e.c * TILE, y0: e.r * TILE + 1, y: e.r * TILE + 1, w: 12, h: 11, vx: FLYER_V,
+                                 t: Math.floor(hash(e.c, e.r, 9) * 100) };
+    // A spider's thread is tied to the bottom of the square above where it is placed.
+    const S = SPIDER[e.type];
+    return { type: e.type, x: e.c * TILE + 1, y: e.r * TILE + 1, top: e.r * TILE, w: S.w, h: S.h, vy: 0,
+             mode: 'wait', wait: Math.floor(hash(e.c, e.r, 7) * S.waitTop), dir: 1, anim: 0 };
+  });
+  shots = [];
+  stals = run.stalDefs.map(s => ({ x: s.c * TILE + 2, y: s.r * TILE, y0: s.r * TILE, w: 8, h: 12, state: 'hang', vy: 0, timer: 0, regrow: s.regrow }));
   oil = 100;
   lamp.off = 0; lamp.t = 0;
   paused = false;
@@ -1258,16 +1364,16 @@ function updatePlayer() {
       const t = tileAt(c, r);
       if (isSolidCh(t) || (isOneWayCh(t) && prevBottom <= r * TILE + 0.01)) {
         land = true;
-        if (t === '~') run.standOn.push(r * run.cols + c);
+        if (isCrumbleCh(t)) run.standOn.push(r * run.cols + c);
       }
     }
     if (land) { p.y = r * TILE - P_H; p.vy = 0; p.onGround = true; }
   } else {
-    // Rock and brick stop the miner's head; so does the bar under a conveyor, if he came up from below it.
+    // Rock and brick stop the miner's head; so does the bar under a barred conveyor, if he came up from below it.
     const r = Math.floor(p.y / TILE), fromBelow = prevBottom - P_H >= (r + 1) * TILE - 0.01;
     for (let c = c0; c <= c1; c++) {
       const t = tileAt(c, r);
-      if (isSolidCh(t) || (isConveyorCh(t) && fromBelow)) { p.y = (r + 1) * TILE; p.vy = 0; break; }
+      if (isSolidCh(t) || (isBarConveyorCh(t) && fromBelow)) { p.y = (r + 1) * TILE; p.vy = 0; break; }
     }
   }
   // Animation follows distance covered on the ground, so poses never change faster than the feet move.
@@ -1291,7 +1397,7 @@ function conveyorUnder(p) {
   const mid = tileAt(Math.floor((p.x + P_W / 2) / TILE), r);
   const ch = isConveyorCh(mid) ? mid
     : [tileAt(Math.floor(p.x / TILE), r), tileAt(Math.floor((p.x + P_W - 0.001) / TILE), r)].find(isConveyorCh);
-  return ch === '<' ? -CONVEYOR : ch === '>' ? CONVEYOR : 0;
+  return ch ? beltDir(ch) * CONVEYOR : 0;
 }
 
 function updateCrumbles() {
@@ -1299,9 +1405,10 @@ function updateCrumbles() {
     run.crumble[key] = (run.crumble[key] || 0) + 1;
     if (run.crumble[key] >= CRUMBLE_T) {
       const r = Math.floor(key / run.cols), c = key % run.cols;
+      const block = run.grid[r][c] === 'C';
       run.grid[r][c] = '.';
       delete run.crumble[key];
-      burst(c * TILE + 6, r * TILE + 2, 10, ['#7a5590', '#4a2f5a', '#2a1838'], 1.2);
+      burst(c * TILE + 6, r * TILE + (block ? 6 : 2), block ? 16 : 10, ['#7a5590', '#4a2f5a', '#2a1838'], 1.2);
       SFX.crumble();
     }
   }
@@ -1310,7 +1417,7 @@ function updateCrumbles() {
 // ---------- Enemies and hazards ----------
 function updateEnemies() {
   for (const e of enemies) {
-    if (e.type === 's') {
+    if (e.type === 's' || e.type === 'm') {
       e.anim++;
       const cc = Math.floor((e.x + e.w / 2) / TILE), feet = e.y + e.h;
       if (!(feet % TILE === 0 && isSupportCh(tileAt(cc, feet / TILE)))) {
@@ -1324,7 +1431,17 @@ function updateEnemies() {
       const front = e.vx > 0 ? nx + e.w : nx;
       const fc = Math.floor(front / TILE), r = Math.floor((e.y + e.h - 1) / TILE);
       const ahead = tileAt(fc, r), below = tileAt(fc, r + 1);
-      if (isSolidCh(ahead) || ahead === '^' || !isSupportCh(below)) e.vx = -e.vx; else e.x = nx;
+      // The mushroom creature is two squares tall, so rock at head height turns it round too.
+      const headBlocked = e.type === 'm' && isSolidCh(tileAt(fc, Math.floor(e.y / TILE)));
+      if (isSolidCh(ahead) || headBlocked || ahead === '^' || !isSupportCh(below)) e.vx = -e.vx; else e.x = nx;
+    } else if (isSpiderCh(e.type)) {
+      updateSpider(e);
+    } else if (e.type === 'f') {
+      updateFlyer(e);
+    } else if (isBossCh(e.type)) {
+      updateBoss(e);
+    } else if (e.type === 'h') {
+      updateHead(e);
     } else {
       e.t++;
       const nx = e.x + e.vx;
@@ -1334,7 +1451,138 @@ function updateEnemies() {
       e.y = e.y0 + Math.sin(e.t * 0.09) * 4;
     }
   }
-  enemies = enemies.filter(e => e.y < run.rows * TILE + 20);
+  enemies = enemies.filter(e => !e.dead && e.y < run.rows * TILE + 20);
+  for (const f of shots) {
+    f.x += f.vx; f.t++;
+    const c = Math.floor((f.x + (f.vx > 0 ? f.w : 0)) / TILE), r = Math.floor((f.y + f.h / 2) / TILE);
+    if (c < 0 || c >= run.cols || isSolidCh(tileAt(c, r))) { f.dead = true; burst(f.x + 3, f.y + 2, 6, ['#ff8a2a', '#ffd040'], 0.8); }
+  }
+  shots = shots.filter(f => !f.dead);
+}
+// Would a walker stepping to nx hit rock (at any height it stands), spikes, or the edge of its ledge?
+function walkerBlocked(e, nx) {
+  const front = e.vx > 0 ? nx + e.w : nx;
+  const fc = Math.floor(front / TILE), feet = Math.floor((e.y + e.h - 1) / TILE);
+  if (front < 0 || front > run.cols * TILE) return true;
+  for (let r = Math.floor(e.y / TILE); r <= feet; r++) if (isSolidCh(tileAt(fc, r))) return true;
+  return tileAt(fc, feet) === '^' || !isSupportCh(tileAt(fc, feet + 1));
+}
+// Bosses pace their ledge. The demon turns to face the miner when he is on its level and throws a fireball
+// every 3 seconds. The skeleton lord lunges with its scythe when he is on its level and close, then rests.
+function updateBoss(e) {
+  e.anim++;
+  if (e.flash > 0) e.flash--;
+  if (e.attack > 0) e.attack--;
+  const cc = Math.floor((e.x + e.w / 2) / TILE), feet = e.y + e.h;
+  if (!(feet % TILE === 0 && isSupportCh(tileAt(cc, feet / TILE)))) {
+    // Lost its footing (a block crumbled): fall until it lands.
+    const boundary = (Math.floor(feet / TILE) + 1) * TILE;
+    if (feet + 2 >= boundary && isSupportCh(tileAt(cc, boundary / TILE))) e.y = boundary - e.h; else e.y += 2;
+    return;
+  }
+  const p = player, pcx = p.x + P_W / 2, ecx = e.x + e.w / 2;
+  const sameLevel = state === 'play' && Math.abs(p.y + P_H - feet) < TILE;
+  const facing = Math.sign(pcx - ecx) === Math.sign(e.vx);
+  if (e.type === 'D') {
+    if (sameLevel && !facing) e.vx = -e.vx;
+    if (--e.timer <= 0) {
+      e.timer = FIRE_EVERY; e.attack = 24;
+      const dir = Math.sign(e.vx) || 1;
+      shots.push({ x: dir > 0 ? e.x + e.w : e.x - 6, y: e.y + 17, w: 6, h: 4, vx: dir * FIRE_V, t: 0 });
+      SFX.crumble();
+    }
+  } else {
+    if (e.mode === 'walk' && sameLevel && facing && Math.abs(pcx - ecx) < LUNGE_RANGE) { e.mode = 'lunge'; e.timer = LUNGE_T; e.attack = LUNGE_T; }
+    else if (e.mode === 'lunge' && --e.timer <= 0) { e.mode = 'rest'; e.timer = LUNGE_REST; }
+    else if (e.mode === 'rest' && --e.timer <= 0) e.mode = 'walk';
+    if (e.mode === 'rest') return;
+  }
+  const speed = e.mode === 'lunge' ? LUNGE_V : (e.type === 'D' ? 0.35 : 0.3);
+  e.vx = Math.sign(e.vx || 1) * speed;
+  const nx = e.x + e.vx;
+  if (walkerBlocked(e, nx)) { e.vx = -e.vx; if (e.mode === 'lunge') { e.mode = 'rest'; e.timer = LUNGE_REST; } }
+  else e.x = nx;
+}
+// The part of a flying head that hurts: each horn is 8 pixels of its width, and a snapped-off horn no longer counts.
+function headHitBox(e) {
+  const l = e.hornL ? 0 : 8, r = e.hornR ? 0 : 8;
+  return { x: e.x + l, y: e.y, w: e.w - l - r, h: e.h };
+}
+// Flying head: flies back and forth like a bat. With the miner within 2 squares it rises or drops, up to one
+// square from its own row, to line up with him; otherwise it drifts back to its row.
+function updateHead(e) {
+  e.t++;
+  if (e.falling) {
+    // Both horns gone: it drops to the ground and crumbles to dust.
+    e.vy = Math.min(e.vy + 0.25, 5);
+    e.y += e.vy;
+    const r = Math.floor((e.y + e.h) / TILE), c0 = Math.floor((e.x + 8) / TILE), c1 = Math.floor((e.x + e.w - 9) / TILE);
+    let land = r >= run.rows;
+    for (let c = c0; c <= c1 && !land; c++) if (isSupportCh(tileAt(c, r))) land = true;
+    if (land) {
+      e.dead = true;
+      if (r < run.rows) e.y = r * TILE - e.h;
+      burst(e.x + e.w / 2, e.y + e.h - 2, 30, ['#c8303a', '#7a1a2a', '#8890a0'], 1.8);
+      SFX.crash();
+    }
+    return;
+  }
+  const nx = e.x + e.vx, front = e.vx > 0 ? nx + e.w : nx;
+  const fc = Math.floor(front / TILE);
+  if (front < 0 || front > run.cols * TILE || isSolidCh(tileAt(fc, Math.floor(e.y / TILE))) || isSolidCh(tileAt(fc, Math.floor((e.y + e.h - 1) / TILE)))) e.vx = -e.vx;
+  else e.x = nx;
+  const p = player, pcx = p.x + P_W / 2, pcy = p.y + P_H / 2, ecx = e.x + e.w / 2, ecy = e.y + e.h / 2;
+  const gapX = Math.max(0, Math.abs(pcx - ecx) - (P_W + e.w) / 2), gapY = Math.max(0, Math.abs(pcy - ecy) - (P_H + e.h) / 2);
+  const near = state === 'play' && gapX <= HEAD_RANGE && gapY <= HEAD_RANGE;
+  const target = near ? clamp(pcy - e.h / 2, e.y0 - TILE, e.y0 + TILE) : e.y0;
+  const ny = e.y + clamp(target - e.y, -HEAD_V, HEAD_V);
+  const c0 = Math.floor(e.x / TILE), c1 = Math.floor((e.x + e.w - 1) / TILE), rr = Math.floor((ny + (ny > e.y ? e.h - 1 : 0)) / TILE);
+  let ok = true;
+  for (let c = c0; c <= c1; c++) if (isSolidCh(tileAt(c, rr))) ok = false;
+  if (ok) e.y = ny;
+}
+// Flying monster: patrols like a bat, but faster and bobbing a whole row up. Within a square of the miner it
+// flies straight at him; once he is clear it drifts back to its patrol height.
+function updateFlyer(e) {
+  e.t++;
+  const p = player, pcx = p.x + P_W / 2, pcy = p.y + P_H / 2, ecx = e.x + e.w / 2, ecy = e.y + e.h / 2;
+  const gapX = Math.max(0, Math.abs(pcx - ecx) - (P_W + e.w) / 2), gapY = Math.max(0, Math.abs(pcy - ecy) - (P_H + e.h) / 2);
+  const chase = state === 'play' && gapX <= FLYER_CHASE && gapY <= FLYER_CHASE;
+  const blocked = (x, y) => isSolidCh(tileAt(Math.floor(x / TILE), Math.floor(y / TILE)));
+  if (chase) {
+    const dx = pcx - ecx, dy = pcy - ecy, d = Math.hypot(dx, dy) || 1;
+    const nx = e.x + dx / d * FLYER_V, ny = e.y + dy / d * FLYER_V;
+    if (!blocked(nx + e.w / 2, e.y + e.h / 2)) e.x = nx;
+    if (!blocked(e.x + e.w / 2, ny + e.h / 2)) e.y = ny;
+    if (dx !== 0) e.vx = Math.sign(dx) * FLYER_V;
+    return;
+  }
+  const nx = e.x + e.vx, front = e.vx > 0 ? nx + e.w : nx;
+  if (blocked(front, e.y + e.h / 2) || front < 0 || front > run.cols * TILE) e.vx = -e.vx; else e.x = nx;
+  const target = e.y0 - TILE / 2 + Math.cos(e.t * 0.06) * TILE / 2;   // from its own row up into the row above
+  e.y += clamp(target - e.y, -FLYER_V, FLYER_V);
+}
+// The lowest a spider can hang: just above the first ledge, floor or solid tile under any column it covers.
+function spiderBottom(e) {
+  const c0 = Math.floor(e.x / TILE), c1 = Math.floor((e.x + e.w - 1) / TILE);
+  for (let r = Math.floor(e.top / TILE); r < run.rows; r++) {
+    for (let c = c0; c <= c1; c++) if (isSupportCh(tileAt(c, r))) return r * TILE - e.h;
+  }
+  return run.rows * TILE - e.h;
+}
+// Spiders drop on their thread to the first ledge or floor, wait, climb back to the top, wait, and go again.
+function updateSpider(e) {
+  const S = SPIDER[e.type];
+  if (e.mode === 'wait') {
+    if (--e.wait <= 0) e.mode = 'move';
+    else return;
+  }
+  e.anim++;
+  const lo = e.top + 1, hi = Math.max(lo, spiderBottom(e));
+  e.y += e.dir * S.v;
+  if (e.dir > 0 && e.y >= hi) { e.y = hi; e.dir = -1; e.mode = 'wait'; e.wait = S.waitBottom; }
+  else if (e.dir < 0 && e.y <= lo) { e.y = lo; e.dir = 1; e.mode = 'wait'; e.wait = S.waitTop; }
+  else if (e.y > hi) e.y = hi;   // a block appeared under it? (never happens now, but keep it out of the floor)
 }
 // A stalactite only drops when nothing is in the way: no rock, brick, ledge or conveyor between it and the
 // miner's head, either in the column it falls down or in the column the miner is standing in.
@@ -1347,6 +1595,12 @@ function stalClearTo(s, pcx) {
 function updateStalactites() {
   const pcx = player.x + P_W / 2;
   for (const s of stals) {
+    // A regrowing stalactite comes back where it hung, 2 seconds after it shattered.
+    if (s.state === 'gone' && s.regrow) {
+      if (++s.timer >= REGROW_T) { s.state = 'grow'; s.timer = GROW_T; s.y = s.y0; s.vy = 0; s.px = s.x; s.py = s.y; }
+      continue;
+    }
+    if (s.state === 'grow') { if (--s.timer <= 0) s.state = 'hang'; continue; }
     if (s.state === 'hang') {
       if (Math.abs(pcx - (s.x + 4)) < 12 && player.y > s.y && stalClearTo(s, pcx)) { s.state = 'shake'; s.timer = 20; SFX.shake(); }
     } else if (s.state === 'shake') {
@@ -1354,9 +1608,38 @@ function updateStalactites() {
     } else if (s.state === 'fall') {
       s.vy = Math.min(s.vy + 0.3, 7);
       s.y += s.vy;
+      // A falling stalactite kills any flying monster it hits, and costs a boss one of its three lives.
+      for (const e of enemies) {
+        // A stalactite that hits a flying head snaps off the horn on the side it lands; the head flies on.
+        if (e.type === 'h' && s.state === 'fall' && !e.falling && overlap({ x: s.x, y: s.y, w: s.w, h: s.h }, headHitBox(e))) {
+          let left = s.x + 4 < e.x + e.w / 2;
+          if (left && !e.hornL) left = false; else if (!left && !e.hornR) left = true;
+          if (left) e.hornL = false; else e.hornR = false;
+          if (!e.hornL && !e.hornR) { e.falling = true; e.vy = 0; }   // with both horns gone it drops
+          s.state = 'gone'; s.timer = 0;
+          burst(left ? e.x + 3 : e.x + e.w - 3, e.y + 3, 12, ['#2a2030', '#5a4a6a', '#a090ff'], 1.4);
+          SFX.crash();
+          continue;
+        }
+        if (isBossCh(e.type) && s.state === 'fall' && overlap({ x: s.x, y: s.y, w: s.w, h: s.h }, { x: e.x + 2, y: e.y, w: e.w - 4, h: e.h })) {
+          s.state = 'gone'; s.timer = 0;
+          burst(s.x + 4, s.y + s.h, 14, ['#6a5ac8', '#3a2f80', '#a090ff'], 1.6);
+          SFX.crash();
+          if (--e.hp <= 0) {
+            e.dead = true;
+            burst(e.x + e.w / 2, e.y + e.h / 2, 40, e.type === 'D' ? ['#d0303a', '#ff8a2a', '#ffd040'] : ['#a070c8', '#e8f0f8', '#ff5040'], 2.2);
+            addScore(BOSS_SCORE);
+          } else e.flash = 40;
+          continue;
+        }
+        if (e.type !== 'f' || e.dead || !overlap({ x: s.x, y: s.y, w: s.w, h: s.h }, { x: e.x + 1, y: e.y + 1, w: e.w - 2, h: e.h - 2 })) continue;
+        e.dead = true;
+        burst(e.x + e.w / 2, e.y + e.h / 2, 16, ['#6fd05a', '#3f8a2a', '#ff8a2a'], 1.6);
+        SFX.crash();
+      }
       const r = Math.floor((s.y + s.h) / TILE), c = Math.floor((s.x + 4) / TILE);
-      if (r >= run.rows || isSupportCh(tileAt(c, r))) {
-        s.state = 'gone';
+      if (s.state === 'fall' && (r >= run.rows || isSupportCh(tileAt(c, r)))) {
+        s.state = 'gone'; s.timer = 0;
         if (r < run.rows) s.y = r * TILE - s.h;
         burst(s.x + 4, s.y + s.h, 14, ['#6a5ac8', '#3a2f80', '#a090ff'], 1.6);
         SFX.crash();
@@ -1380,8 +1663,11 @@ function checkHazards() {
   for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
     if (tileAt(c, r) === '^' && p.y + P_H > r * TILE + 6 && overlap(hit, { x: c * TILE + 1, y: r * TILE, w: TILE - 2, h: TILE })) { die('Spiked!'); return; }
   }
+  for (const f of shots) if (overlap(hit, f)) { die('Burned by a fireball!'); return; }
   for (const e of enemies) {
-    if (overlap(hit, { x: e.x + 1, y: e.y + 1, w: e.w - 2, h: e.h - 1 })) { die(e.type === 's' ? 'Slimed!' : 'Bitten by a bat!'); return; }
+    if (e.dead) continue;
+    const eb = e.type === 'h' ? headHitBox(e) : e;
+    if (overlap(hit, { x: eb.x + 1, y: eb.y + 1, w: eb.w - 2, h: eb.h - 1 })) { die(e.type === 's' ? 'Slimed!' : e.type === 'h' ? 'Butted by a flying head!' : e.type === 'D' ? 'Slain by the demon!' : e.type === 'L' ? 'Reaped by the skeleton lord!' : e.type === 'm' ? 'Squashed by a mushroom creature!' : e.type === 'b' ? 'Bitten by a bat!' : e.type === 'f' ? 'Caught by a flying monster!' : 'Bitten by a spider!'); return; }
   }
   for (const s of stals) {
     // Two boxes that follow the taper: the broad root, then the narrow point.
@@ -1475,10 +1761,10 @@ function updateDying() {
 function updateClear() {
   updateParticles();
   stateTimer++;
-  // Remaining lamp oil drains into the score, then the next cavern starts.
+  // Remaining lamp oil drains into the score at OIL_POINTS a percent (a full lamp is 2,000), then the next cavern starts.
   if (oil > 0) {
     const d = Math.min(1, oil);
-    oil -= d; addScore(Math.round(d * 5));
+    oil -= d; addScore(Math.round(d * OIL_POINTS));
     if (stateTimer % 4 === 0) SFX.tick();
     run.drainedAt = stateTimer;
   } else if (stateTimer - (run.drainedAt || 0) > 90 || (stateTimer > 30 && confirmPressed())) {
@@ -1542,6 +1828,7 @@ function savePrevPositions() {
   cam.pwx = cam.wx; cam.pwy = cam.wy;
   for (const e of enemies) { e.px = e.x; e.py = e.y; }
   for (const s of stals) { s.px = s.x; s.py = s.y; }
+  for (const f of shots) { f.px = f.x; f.py = f.y; }
 }
 function punchLight(x, y, r, strength) {
   if (r <= 0) return;
@@ -1624,22 +1911,31 @@ function drawWorldBase() {
   artView(() => {
     for (let r = r0; r < r1; r++) for (let c = c0; c < c1; c++) {
       const ch = run.grid[r][c];
-      if (isConveyorCh(ch)) { drawConveyor(ctx, c * AT, r * AT, ch === '>' ? 1 : -1, frame); continue; }
-      if (ch !== '~') continue;
+      if (isConveyorCh(ch)) { drawConveyor(ctx, c * AT, r * AT, beltDir(ch), frame, isBarConveyorCh(ch)); continue; }
+      if (!isCrumbleCh(ch)) continue;
       const stage = (run.crumble[r * run.cols + c] || 0) / CRUMBLE_T;
       const j = stage > 0 ? Math.round((Math.random() - 0.5) * 4 * stage) : 0;
-      drawCrumble(ctx, c * AT, r * AT + j, stage);
+      (ch === 'C' ? drawCrumbleBlock : drawCrumble)(ctx, c * AT, r * AT + j, stage);
     }
     for (const o of run.oils) if (!o.taken) drawOil(ctx, (o.c * TILE + 2) * ART, (o.r * TILE + 2) * ART);
     for (const s of stals) {
       if (s.state === 'gone') continue;
       const j = s.state === 'shake' ? (frame % 4 < 2 ? -1 : 1) : 0;
-      drawStalactite(ctx, camSnapX(s.x + j) * ART, camSnapY(lerpY(s)) * ART);
+      drawStalactite(ctx, camSnapX(s.x + j) * ART, camSnapY(lerpY(s)) * ART, !!s.regrow, s.state === 'grow' ? 1 - s.timer / GROW_T : 1);
     }
     drawExit(ctx, run.exit.c * AT, run.exit.r * AT, run.open, frame, run.exit.kind);
     for (const e of enemies) {
       const ex = camSnapX(lerpX(e)) * ART, ey = camSnapY(lerpY(e)) * ART;
       if (e.type === 's') drawSpriteArt(Math.floor(e.anim / 16) % 2 ? SLIME_B : SLIME_A, SCOL, ex, ey, e.vx < 0);
+      else if (isBossCh(e.type)) {
+        if (e.flash % 8 >= 4) continue;   // flashes after a hit
+        const art = e.type === 'D' ? (e.attack > 0 || Math.floor(e.anim / 12) % 2 ? DEMON_B : DEMON_A) : (e.attack > 0 ? LORD_B : LORD_A);
+        drawSpriteArt(art, e.type === 'D' ? DCOL : LCOL, ex, ey, e.vx < 0);
+      }
+      else if (e.type === 'h') drawSpriteArt(HEAD_ART[Math.floor(e.t / 12) % 2][e.hornL ? 1 : 0][e.hornR ? 1 : 0], HCOL, ex, ey, false);
+      else if (e.type === 'm') drawSpriteArt(Math.floor(e.anim / 14) % 2 ? SHROOM_B : SHROOM_A, MCOL, ex, ey, e.vx < 0);
+      else if (e.type === 'f') drawSpriteArt(Math.floor(e.t / 6) % 2 ? FLYER_B : FLYER_A, FCOL, ex, ey, e.vx < 0);
+      else if (isSpiderCh(e.type)) drawSpider(ctx, e.type, ex, camSnapY(e.top) * ART, ey, Math.floor(e.anim / 10) % 2);
       else drawSpriteArt(Math.floor(e.t / 8) % 2 ? BAT_B : BAT_A, BCOL, ex, ey, false);
     }
     if (state === 'play' || state === 'clear') {
@@ -1651,6 +1947,7 @@ function drawWorldBase() {
         : p.held;   // stopped mid-stride: hold that pose exactly
       drawMinerArt(pose, camSnapX(lerpX(p) + P_W / 2) * ART, camSnapY(lerpY(p) + P_H) * ART, p.face < 0);
     }
+    for (const f of shots) drawFireball(ctx, camSnapX(lerpX(f)) * ART, camSnapY(lerpY(f)) * ART, f.t, f.vx);
     for (const q of particles) px(ctx, q.col, snap(q.x) * ART, snap(q.y) * ART, 2, 2);
   });
 }
@@ -1659,10 +1956,18 @@ function drawWorldGlow() {
   artView(() => {
     for (const s of run.sparkles) if (!s.taken) drawSparkle(ctx, (s.c * TILE + 6) * ART, (s.r * TILE + 6) * ART, frame + s.c * 7);
     if (run.open) drawExit(ctx, run.exit.c * AT, run.exit.r * AT, true, frame, run.exit.kind);
+    for (const f of shots) drawFireball(ctx, camSnapX(lerpX(f)) * ART, camSnapY(lerpY(f)) * ART, f.t, f.vx);
     for (const o of run.oils) if (!o.taken && Math.floor((frame + o.c * 13) / 20) % 3 === 0) px(ctx, '#ffe0b0', (o.c * TILE + 2) * ART + 3, (o.r * TILE + 2) * ART + 10, 1, 3);
     for (const e of enemies) {
       const ex = camSnapX(lerpX(e)) * ART, ey = camSnapY(lerpY(e)) * ART;
       if (e.type === 'b') px(ctx, '#ff4a5a', ex + 8, ey + 4, 4, 2);
+      else if (e.type === 'y') px(ctx, '#ff4a5a', ex + 8, ey + 6, 4, 2);
+      else if (e.type === 'D') { const o = e.vx < 0 ? 0 : 0; px(ctx, '#ffe040', ex + 16 + o, ey + 12, 2, 2); px(ctx, '#ffe040', ex + 30 - o, ey + 12, 2, 2); }
+      else if (e.type === 'L') px(ctx, '#ff5040', ex + 22, ey + 8, 4, 2);
+      else if (e.type === 'h') { px(ctx, '#ffe040', ex + 16, ey + 14, 2, 2); px(ctx, '#ffe040', ex + 30, ey + 14, 2, 2); }
+      else if (e.type === 'm') { ctx.globalAlpha = 0.45; px(ctx, '#efe0ff', ex + 6, ey + 4, 4, 2); px(ctx, '#efe0ff', ex + 14, ey + 4, 4, 2); ctx.globalAlpha = 1; }
+      else if (e.type === 'f') { ctx.globalAlpha = 0.6; px(ctx, '#f4fff0', ex + 8, ey + 8, 8, 6); ctx.globalAlpha = 1; px(ctx, '#10202a', ex + 10, ey + 10, 4, 2); }
+      else if (e.type === 'Y') { px(ctx, '#ff4a5a', ex + 18, ey + 10, 2, 2); px(ctx, '#ff4a5a', ex + 24, ey + 10, 2, 2); }
       else {
         ctx.globalAlpha = 0.5;
         const b = Math.floor(e.anim / 16) % 2;
@@ -1787,17 +2092,31 @@ const PALETTE = [
   { ch: '~', key: 'Digit4', label: '4', name: 'Crumbling ledge' },
   { ch: '<', key: 'KeyZ', label: 'Z', name: 'Conveyor left' },
   { ch: '>', key: 'KeyX', label: 'X', name: 'Conveyor right' },
+  { ch: '(', key: 'KeyV', label: 'V', name: 'Open belt left' },
+  { ch: ')', key: 'KeyB', label: 'B', name: 'Open belt right' },
+  { ch: 'C', key: 'KeyG', label: 'G', name: 'Crumbling block' },
   { ch: '^', key: 'Digit5', label: '5', name: 'Spikes' },
   { ch: 'v', key: 'Digit6', label: '6', name: 'Stalactite' },
+  { ch: 'V', key: 'Quote', label: "'", name: 'Regrowing stalactite' },
   { ch: '*', key: 'Digit7', label: '7', name: 'Sparkle' },
   { ch: 'o', key: 'Digit8', label: '8', name: 'Oil flask' },
   { ch: 's', key: 'Digit9', label: '9', name: 'Slime' },
   { ch: 'b', key: 'Digit0', label: '0', name: 'Bat' },
+  { ch: 'y', key: 'KeyY', label: 'Y', name: 'Small spider' },
+  { ch: 'Y', key: 'KeyU', label: 'U', name: 'Large spider' },
+  { ch: 'f', key: 'KeyJ', label: 'J', name: 'Flying monster' },
+  { ch: 'm', key: 'KeyQ', label: 'Q', name: 'Mushroom creature' },
+  { ch: 'D', key: 'Minus', label: '-', name: 'Demon boss' },
+  { ch: 'L', key: 'Equal', label: '=', name: 'Skeleton lord' },
+  { ch: 'h', key: 'Semicolon', label: ';', name: 'Flying head' },
   { ch: 'P', key: 'KeyP', label: 'P', name: 'Start' },
   { ch: 'E', key: 'KeyE', label: 'E', name: 'Exit' },
   { ch: '.', key: 'Period', label: '.', name: 'Eraser' },
 ];
-const PAL_X = 3, PAL_W = 15;
+// The palette sits in two rows under the cavern; the selected tile's name and key show to its right.
+const PAL_X = 3, PAL_W = 13, PAL_H = 11, PAL_PER_ROW = Math.ceil(PALETTE.length / 2);
+const PAL_INFO_X = PAL_X + PAL_PER_ROW * PAL_W + 6;
+const palCell = i => ({ x: PAL_X + (i % PAL_PER_ROW) * PAL_W, y: PLAY_H + 1 + Math.floor(i / PAL_PER_ROW) * PAL_H });
 // vc, vr: the column and row at the top-left of the editor's view, for caverns larger than the screen.
 const ed = { idx: 0, grid: null, name: '', oil: BASE_OIL, tile: '#', dirty: false, msg: '', msgT: 0, help: false,
              hover: null, painting: 0, staticCanvas: null, vc: 0, vr: 0 };
@@ -1972,8 +2291,9 @@ canvas.addEventListener('mousedown', e => {
   e.preventDefault();
   const m = mousePos(e);
   if (m.y >= PLAY_H) {
-    const i = Math.floor((m.x - PAL_X) / PAL_W);
-    if (i >= 0 && i < PALETTE.length) { ed.tile = PALETTE[i].ch; SFX.click(); }
+    const col = Math.floor((m.x - PAL_X) / PAL_W), row = Math.floor((m.y - PLAY_H - 1) / PAL_H);
+    const i = row * PAL_PER_ROW + col;
+    if (col >= 0 && col < PAL_PER_ROW && row >= 0 && row < 2 && i < PALETTE.length) { ed.tile = PALETTE[i].ch; SFX.click(); }
     return;
   }
   ed.painting = e.button === 2 ? 2 : 1;
@@ -1994,14 +2314,23 @@ function drawCellArt(ch, x, y, t, kind) {
   const X = x * ART, Y = y * ART;
   switch (ch) {
     case '~': drawCrumble(ctx, X, Y, 0); break;
+    case 'C': drawCrumbleBlock(ctx, X, Y, 0); break;
     case 'v': drawStalactite(ctx, X + 4, Y); break;
+    case 'V': drawStalactite(ctx, X + 4, Y, true); break;
     case '*': drawSparkle(ctx, X + 12, Y + 12, t); break;
     case 'o': drawOil(ctx, X + 4, Y + 4); break;
     case 's': drawSpriteArt(SLIME_A, SCOL, X + 2, Y + 10, false); break;
     case 'b': drawSpriteArt(BAT_A, BCOL, X + 2, Y + 6, false); break;
+    case 'h': drawSpriteArt(HEAD_A, HCOL, X, Y, false); break;
+    case 'D': drawSpriteArt(DEMON_A, DCOL, X, Y + AT - 68, false); break;
+    case 'L': drawSpriteArt(LORD_A, LCOL, X, Y + AT - 68, false); break;
+    case 'm': drawSpriteArt(SHROOM_A, MCOL, X, Y + AT - 44, false); break;
+    case 'f': drawSpriteArt(FLYER_A, FCOL, X, Y + 1, false); break;
+    case 'y': drawSpider(ctx, 'y', X + 2, Y, Y + 4, 0); break;
+    case 'Y': drawSpider(ctx, 'Y', X + 2, Y, Y + 2, 0); break;
     case 'P': drawMinerArt('stand', X + 12, Y + 24, false); break;
     case 'E': drawExit(ctx, X, Y, true, t, kind); break;
-    case '<': case '>': drawConveyor(ctx, X, Y, ch === '>' ? 1 : -1, t); break;
+    case '<': case '>': case '(': case ')': drawConveyor(ctx, X, Y, beltDir(ch), t, isBarConveyorCh(ch)); break;
   }
 }
 function drawTileIcon(ch, x, y, t) {
@@ -2009,6 +2338,16 @@ function drawTileIcon(ch, x, y, t) {
   if (ch === '.') { px(ctx, '#ff5a6a', x + 2, y + 5, 8, 2); px(ctx, '#ffffff', x + 2, y + 5, 3, 2); return; }
   if (ch === 'E') { artView(() => drawExit(ctx, x * ART, y * ART, true, t, 'right')); return; }
   if (ch === 'P') { artView(() => drawMinerArt('stand', x * ART + 12, y * ART + 24, false)); return; }
+  // Creatures bigger than a square are shrunk to fit their palette button.
+  // [scale, cell x, cell y]: where to put the creature's own cell inside the shrunken button.
+  const big = { Y: [0.5, -1, 4], h: [0.5, 0, 6], m: [0.5, 6, 11], D: [1 / 3, 6, 23], L: [1 / 3, 6, 23] }[ch];
+  if (big) {
+    const [k, cx, cy] = big;
+    ctx.save(); ctx.translate(x, y); ctx.scale(k, k);
+    artView(() => drawCellArt(ch, cx, cy, t));
+    ctx.restore();
+    return;
+  }
   artView(() => drawCellArt(ch, x, ch === '~' || isConveyorCh(ch) ? y + 3 : y, t));
 }
 function drawEditor() {
@@ -2041,20 +2380,19 @@ function drawEditor() {
   px(ctx, '#05051a', 0, PLAY_H, VW, HUD_H);
   px(ctx, '#2a3a7a', 0, PLAY_H, VW, 1);
   PALETTE.forEach((p, i) => {
-    const x = PAL_X + i * PAL_W, y = PLAY_H + 2;
-    px(ctx, p.ch === ed.tile ? '#ffe94a' : '#1a1a3a', x, y, 14, 14);
-    px(ctx, '#07061a', x + 1, y + 1, 12, 12);
-    ctx.save(); ctx.beginPath(); ctx.rect(x + 1, y + 1, 12, 12); ctx.clip();
-    drawTileIcon(p.ch, x + 1, y + 1, frame);
+    const { x, y } = palCell(i);
+    px(ctx, p.ch === ed.tile ? '#ffe94a' : '#1a1a3a', x, y, PAL_W - 1, PAL_H);
+    px(ctx, '#07061a', x + 1, y + 1, PAL_W - 3, PAL_H - 2);
+    ctx.save(); ctx.beginPath(); ctx.rect(x + 1, y + 1, PAL_W - 3, PAL_H - 2); ctx.clip();
+    drawTileIcon(p.ch, x, y - 0.5, frame);
     ctx.restore();
-    text(p.label, x + 7, y + 15, { size: 5, align: 'center', color: '#8890c0', shadow: false });
   });
   const sel = PALETTE.find(p => p.ch === ed.tile);
   const info = `CAVERN ${ed.idx + 1}/${levels.length}${ed.dirty ? ' *' : ''}`;
   text(info, VW - 4, PLAY_H + 3, { size: 7, align: 'right', color: ed.dirty ? '#ff9a3a' : '#bcd0ff' });
   text(ed.name.slice(0, 16), VW - 4, PLAY_H + 13, { size: 6, align: 'right', color: '#e8ecff', bold: false });
-  text(sel ? sel.name.toUpperCase() : '', 232, PLAY_H + 3, { size: 6, color: '#ffe94a' });
-  text(`OIL ${ed.oil}s  H: HELP`, 232, PLAY_H + 13, { size: 6, color: '#8890c0' });
+  text(sel ? `${sel.name.toUpperCase()} (${sel.label})` : '', PAL_INFO_X, PLAY_H + 3, { size: 6, color: '#ffe94a' });
+  text(`OIL ${ed.oil}s  H: HELP`, PAL_INFO_X, PLAY_H + 13, { size: 6, color: '#8890c0' });
   if (ed.msgT > 0 && !ed.help) {
     ctx.globalAlpha = Math.min(1, ed.msgT / 30);
     px(ctx, 'rgba(0,0,0,0.75)', 0, PLAY_H - 14, VW, 13);
@@ -2067,7 +2405,7 @@ function drawEditor() {
     const lines = [
       ['Left click / drag', 'Paint the selected tile'],
       ['Right click / drag', 'Erase'],
-      ['1-0, Z, X, P, E, .', 'Pick a tile (or click the palette)'],
+      ["1-0 - = ; '  Z X V B G Y U J Q P E .", 'Pick a tile (or click the palette)'],
       ['Arrow keys', 'Scroll around a cavern larger than the screen'],
       ['T', 'Test play this cavern (Esc to come back)'],
       ['S', 'Save this cavern'],
