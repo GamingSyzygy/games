@@ -61,6 +61,7 @@ As the oil burns down, your circle of light shrinks to 40% of its full size at 2
 | Conveyor | A ledge that carries you left or right. Running against it is slower. A solid bar runs underneath, so you can't jump up through one. |
 | Open belt | A conveyor with no bar underneath, so you can jump up through it. |
 | Stalactite | Shakes, then falls when you pass beneath it, unless rock or a ledge is in the way. |
+| Regrowing stalactite | Teal crystal. Falls like a stalactite, and a new one grows back 2 seconds after the last one shatters. |
 | Spikes, slimes, bats, mushroom creatures | Lose a life on contact. |
 | Spiders | Drop on a thread to the ledge or floor below, then climb back up. The large spider is two squares wide. |
 | Flying monster | Flies faster than a bat, bobbing into the row above, and comes for you when you are within a square. A falling stalactite kills it. |

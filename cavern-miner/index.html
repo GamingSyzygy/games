@@ -72,7 +72,8 @@ function hash(a, b, s = 0) {
 //    the miner is on its level and close. Three hits from falling stalactites defeat either one.)
 // h  flying head (two squares wide, placed by its left square; flies like a bat, and moves up to a square up
 //    or down to line up with the miner when he is within 2 squares of it)
-const VALID_CHARS = '.#B-~<>()C^v*oEPsbyYfmDLh';
+// V  regrowing stalactite (like v, but a new one grows back 2 seconds after the last one shattered)
+const VALID_CHARS = '.#B-~<>()C^vV*oEPsbyYfmDLh';
 const isSolidCh = ch => ch === '#' || ch === 'B';
 const isOneWayCh = ch => ch === '-' || ch === '~' || ch === 'C' || ch === '<' || ch === '>' || ch === '(' || ch === ')';
 const isConveyorCh = ch => ch === '<' || ch === '>' || ch === '(' || ch === ')';
@@ -783,16 +784,20 @@ function drawSpikes(g, x, y) {
   }
   px(g, '#1d3c7a', x, y + AT - 1, AT, 1);
 }
-function drawStalactite(g, x, y) {
-  for (let i = 0; i < 24; i++) {
-    const w = Math.max(1, Math.round(16 * Math.pow(1 - i / 24, 0.8)));
+// A regrowing stalactite is drawn in teal crystal; grown (0 to 1) shows how much of it has grown back.
+const STAL_COL = { false: ['#3a2f80', '#7a6ad8', '#251d55', '#a898ff'], true: ['#1f6a78', '#5fd0d8', '#123a48', '#b0fff4'] };
+function drawStalactite(g, x, y, regrow = false, grown = 1) {
+  const [body, lit, dark, tip] = STAL_COL[regrow];
+  const len = Math.max(2, Math.round(24 * grown));
+  for (let i = 0; i < len; i++) {
+    const w = Math.max(1, Math.round(16 * Math.pow(1 - (i + 24 - len) / 24, 0.8)));
     const ox = x + Math.floor((16 - w) / 2);
-    px(g, '#3a2f80', ox, y + i, w, 1);
-    px(g, '#7a6ad8', ox, y + i, Math.max(1, Math.floor(w / 4)), 1);
-    if (w > 3) px(g, '#251d55', ox + w - 2, y + i, 2, 1);
+    px(g, body, ox, y + i, w, 1);
+    px(g, lit, ox, y + i, Math.max(1, Math.floor(w / 4)), 1);
+    if (w > 3) px(g, dark, ox + w - 2, y + i, 2, 1);
   }
-  px(g, '#251d55', x, y, 16, 2);
-  px(g, '#a898ff', x + 7, y + 22, 1, 2);
+  px(g, dark, x, y, 16, 2);
+  if (grown >= 1) px(g, tip, x + 7, y + 22, 1, 2);
 }
 function drawSparkle(g, cx, cy, t) {
   const a = 6 + (Math.floor(t / 10) % 4 === 0 ? 2 : 0);
@@ -1083,6 +1088,7 @@ const HEAD_V = 0.8, HEAD_RANGE = 2 * TILE;
 // The head's art with either horn snapped off: HEAD_ART[frame][left horn ? 1 : 0][right horn ? 1 : 0].
 const dropHorn = (map, side) => map.map(r => r.split('').map((ch, i) => ch === 'H' && (side < 0 ? i < r.length / 2 : i >= r.length / 2) ? '.' : ch).join(''));
 const HEAD_ART = [HEAD_A, HEAD_B].map(m => [[dropHorn(dropHorn(m, -1), 1), dropHorn(m, -1)], [dropHorn(m, 1), m]]);
+const REGROW_T = 120, GROW_T = 20;   // a regrowing stalactite returns 2 seconds after it shatters, growing for 1/3 s
 const isBossCh = ch => ch === 'D' || ch === 'L';
 const BOSS_HP = 3, BOSS_SCORE = 1000;
 const FIRE_EVERY = 180, FIRE_V = 1.6;              // the demon's fireball: every 3 seconds, along its row
@@ -1204,7 +1210,7 @@ function makeRun(def) {
     else if (ch === 'E') { R.exit = { c, r }; base[r][c] = '#'; continue; }   // the exit is set into solid rock
     else if (ch === 'P') R.start = { c, r };
     else if ('sbfmDLh'.includes(ch) || isSpiderCh(ch)) R.enemyDefs.push({ type: ch, c, r });
-    else if (ch === 'v') R.stalDefs.push({ c, r });
+    else if (ch === 'v' || ch === 'V') R.stalDefs.push({ c, r, regrow: ch === 'V' });
     else continue;
     base[r][c] = '.';
   }
@@ -1244,7 +1250,7 @@ function resetActors() {
              mode: 'wait', wait: Math.floor(hash(e.c, e.r, 7) * S.waitTop), dir: 1, anim: 0 };
   });
   shots = [];
-  stals = run.stalDefs.map(s => ({ x: s.c * TILE + 2, y: s.r * TILE, w: 8, h: 12, state: 'hang', vy: 0, timer: 0 }));
+  stals = run.stalDefs.map(s => ({ x: s.c * TILE + 2, y: s.r * TILE, y0: s.r * TILE, w: 8, h: 12, state: 'hang', vy: 0, timer: 0, regrow: s.regrow }));
   oil = 100;
   lamp.off = 0; lamp.t = 0;
   paused = false;
@@ -1588,6 +1594,12 @@ function stalClearTo(s, pcx) {
 function updateStalactites() {
   const pcx = player.x + P_W / 2;
   for (const s of stals) {
+    // A regrowing stalactite comes back where it hung, 2 seconds after it shattered.
+    if (s.state === 'gone' && s.regrow) {
+      if (++s.timer >= REGROW_T) { s.state = 'grow'; s.timer = GROW_T; s.y = s.y0; s.vy = 0; s.px = s.x; s.py = s.y; }
+      continue;
+    }
+    if (s.state === 'grow') { if (--s.timer <= 0) s.state = 'hang'; continue; }
     if (s.state === 'hang') {
       if (Math.abs(pcx - (s.x + 4)) < 12 && player.y > s.y && stalClearTo(s, pcx)) { s.state = 'shake'; s.timer = 20; SFX.shake(); }
     } else if (s.state === 'shake') {
@@ -1603,13 +1615,13 @@ function updateStalactites() {
           if (left && !e.hornL) left = false; else if (!left && !e.hornR) left = true;
           if (left) e.hornL = false; else e.hornR = false;
           if (!e.hornL && !e.hornR) { e.falling = true; e.vy = 0; }   // with both horns gone it drops
-          s.state = 'gone';
+          s.state = 'gone'; s.timer = 0;
           burst(left ? e.x + 3 : e.x + e.w - 3, e.y + 3, 12, ['#2a2030', '#5a4a6a', '#a090ff'], 1.4);
           SFX.crash();
           continue;
         }
         if (isBossCh(e.type) && s.state === 'fall' && overlap({ x: s.x, y: s.y, w: s.w, h: s.h }, { x: e.x + 2, y: e.y, w: e.w - 4, h: e.h })) {
-          s.state = 'gone';
+          s.state = 'gone'; s.timer = 0;
           burst(s.x + 4, s.y + s.h, 14, ['#6a5ac8', '#3a2f80', '#a090ff'], 1.6);
           SFX.crash();
           if (--e.hp <= 0) {
@@ -1626,7 +1638,7 @@ function updateStalactites() {
       }
       const r = Math.floor((s.y + s.h) / TILE), c = Math.floor((s.x + 4) / TILE);
       if (s.state === 'fall' && (r >= run.rows || isSupportCh(tileAt(c, r)))) {
-        s.state = 'gone';
+        s.state = 'gone'; s.timer = 0;
         if (r < run.rows) s.y = r * TILE - s.h;
         burst(s.x + 4, s.y + s.h, 14, ['#6a5ac8', '#3a2f80', '#a090ff'], 1.6);
         SFX.crash();
@@ -1908,7 +1920,7 @@ function drawWorldBase() {
     for (const s of stals) {
       if (s.state === 'gone') continue;
       const j = s.state === 'shake' ? (frame % 4 < 2 ? -1 : 1) : 0;
-      drawStalactite(ctx, camSnapX(s.x + j) * ART, camSnapY(lerpY(s)) * ART);
+      drawStalactite(ctx, camSnapX(s.x + j) * ART, camSnapY(lerpY(s)) * ART, !!s.regrow, s.state === 'grow' ? 1 - s.timer / GROW_T : 1);
     }
     drawExit(ctx, run.exit.c * AT, run.exit.r * AT, run.open, frame, run.exit.kind);
     for (const e of enemies) {
@@ -2084,6 +2096,7 @@ const PALETTE = [
   { ch: 'C', key: 'KeyG', label: 'G', name: 'Crumbling block' },
   { ch: '^', key: 'Digit5', label: '5', name: 'Spikes' },
   { ch: 'v', key: 'Digit6', label: '6', name: 'Stalactite' },
+  { ch: 'V', key: 'Quote', label: "'", name: 'Regrowing stalactite' },
   { ch: '*', key: 'Digit7', label: '7', name: 'Sparkle' },
   { ch: 'o', key: 'Digit8', label: '8', name: 'Oil flask' },
   { ch: 's', key: 'Digit9', label: '9', name: 'Slime' },
@@ -2302,6 +2315,7 @@ function drawCellArt(ch, x, y, t, kind) {
     case '~': drawCrumble(ctx, X, Y, 0); break;
     case 'C': drawCrumbleBlock(ctx, X, Y, 0); break;
     case 'v': drawStalactite(ctx, X + 4, Y); break;
+    case 'V': drawStalactite(ctx, X + 4, Y, true); break;
     case '*': drawSparkle(ctx, X + 12, Y + 12, t); break;
     case 'o': drawOil(ctx, X + 4, Y + 4); break;
     case 's': drawSpriteArt(SLIME_A, SCOL, X + 2, Y + 10, false); break;
@@ -2390,7 +2404,7 @@ function drawEditor() {
     const lines = [
       ['Left click / drag', 'Paint the selected tile'],
       ['Right click / drag', 'Erase'],
-      ['1-0 - = ;  Z X V B G Y U J Q P E .', 'Pick a tile (or click the palette)'],
+      ["1-0 - = ; '  Z X V B G Y U J Q P E .", 'Pick a tile (or click the palette)'],
       ['Arrow keys', 'Scroll around a cavern larger than the screen'],
       ['T', 'Test play this cavern (Esc to come back)'],
       ['S', 'Save this cavern'],
