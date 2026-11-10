@@ -27,7 +27,7 @@ Entering one of the larger caverns, you can arrive at any height on that side. A
 
 ## Time
 
-Each cavern's lamp oil is 30 seconds a screen, times the larger of its width or height in screens: 30 seconds for one screen, 60 for 2 × 2 and 90 for 3 × 3. An oil flask refills 40% of the lamp. Every built-in cavern can be finished with at least 10 seconds of lamp to spare on its fastest route.
+Each cavern's lamp oil is 30 seconds a screen, times the larger of its width or height in screens: 30 seconds for one screen, 60 for 2 × 2 and 90 for 3 × 3. An oil flask adds 10 seconds of lamp in any cavern, up to a full lamp. Every built-in cavern can be finished with at least 10 seconds of lamp to spare on its fastest route.
 
 ## Extra lives
 
@@ -48,6 +48,7 @@ As the oil burns down, your circle of light shrinks to 40% of its full size at 2
 | Pause | P |
 | Sound on/off | M |
 | Quit to title | Esc |
+| Frame-time readout on/off | F |
 
 ## Hazards and pick-ups
 
@@ -57,7 +58,7 @@ As the oil burns down, your circle of light shrinks to 40% of its full size at 2
 | Oil flask | 50 points and tops up your lamp. |
 | Crumbling ledge | Collapses if you stand on it too long. |
 | Conveyor | A ledge that carries you left or right. Running against it is slower. |
-| Stalactite | Shakes, then falls when you pass beneath it. |
+| Stalactite | Shakes, then falls when you pass beneath it, unless rock or a ledge is in the way. |
 | Spikes, slimes, bats | Lose a life on contact. |
 | Long falls | Falling more than 8 tiles, measured from the top of a jump, costs a life. |
 
