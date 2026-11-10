@@ -55,7 +55,8 @@ function hash(a, b, s = 0) {
 // -  ledge (stand on it, jump up through it)
 // ~  crumbling ledge (collapses if you stand on it)
 // ^  spikes         v  stalactite (falls when you pass beneath)
-// <  conveyor moving left   >  conveyor moving right (stand on them like a ledge; they carry the miner)
+// <  conveyor moving left   >  conveyor moving right (stand on them like a ledge; they carry the miner.
+//    A solid bar runs under the belt, so unlike a ledge you can't jump up through one)
 // *  sparkle        o  oil flask          P  player start
 // E  exit: sits in the cavern's outer wall, roof or floor, and opens once every sparkle is collected
 // s  slime          b  bat
@@ -695,6 +696,13 @@ function drawCrumble(g, x, y, stage) {
 }
 // Conveyor: a belt on rollers, as tall as a ledge, with chevrons that run the way it carries you (dir -1 or 1).
 function drawConveyor(g, x, y, dir, t) {
+  // The solid bar under the belt, on brackets at each roller: you can't jump up through it.
+  for (const bx of [2, AT - 4]) px(g, '#3a3f5c', x + bx, y + 10, 2, 4);
+  px(g, '#1a1030', x, y + 13, AT, 10);
+  px(g, '#6a7090', x, y + 14, AT, 1);
+  px(g, '#3a3f5c', x, y + 15, AT, 6);
+  px(g, '#24283e', x, y + 21, AT, 1);
+  for (let k = 3; k < AT; k += 6) px(g, '#8890b0', x + k, y + 17, 1, 1);
   px(g, '#1a1030', x, y, AT, 10);
   px(g, '#8890b0', x, y, AT, 2);
   px(g, '#4a4f70', x, y + 2, AT, 1);
@@ -814,13 +822,14 @@ const MF = 40, M_GROUND = 38, M_CX = 17.5;
 const M_THIGH = 6, M_SHIN = 6, M_UPPER = 5, M_FORE = 5;
 const POSES = {
   stand:   { lt: 0, lk: 0, ft: 0, fk: 0, la: 4, le: 10, fa: 4, fe: 10, lean: 0 },
-  // Run: airborne stride (1, 4), contact (2, 5), passing (3, 6). Front thigh 36 deg, rear leg 48 deg, arms 72 deg.
-  run1:    { lt: 36, lk: 55, ft: -48, fk: 0, la: -72, le: 15, fa: 72, fe: 15, lean: 2, air: 2 },
+  // Run: full stride (1, 4), contact (2, 5), passing (3, 6). Front thigh 36 deg, rear leg 48 deg, arms 72 deg.
+  // No pose lifts off: the lowest foot is always on the floor, so stopping mid-stride can hold any pose as it is.
+  run1:    { lt: 36, lk: 55, ft: -48, fk: 0, la: -72, le: 15, fa: 72, fe: 15, lean: 2 },
   run2:    { lt: 20, lk: 25, ft: -30, fk: 60, la: -36, le: 40, fa: 36, fe: 40, lean: 2 },
-  run3:    { lt: -6, lk: 20, ft: 28, fk: 80, la: 0, le: 60, fa: 0, fe: 60, lean: 2, air: 1 },
-  run4:    { lt: -48, lk: 0, ft: 36, fk: 55, la: 72, le: 15, fa: -72, fe: 15, lean: 2, air: 2 },
+  run3:    { lt: -6, lk: 20, ft: 28, fk: 80, la: 0, le: 60, fa: 0, fe: 60, lean: 2 },
+  run4:    { lt: -48, lk: 0, ft: 36, fk: 55, la: 72, le: 15, fa: -72, fe: 15, lean: 2 },
   run5:    { lt: -30, lk: 60, ft: 20, fk: 25, la: 36, le: 40, fa: -36, fe: 40, lean: 2 },
-  run6:    { lt: 28, lk: 80, ft: -6, fk: 20, la: 0, le: 60, fa: 0, fe: 60, lean: 2, air: 1 },
+  run6:    { lt: 28, lk: 80, ft: -6, fk: 20, la: 0, le: 60, fa: 0, fe: 60, lean: 2 },
   // Jump: take-off, rising, apex (front leg 30 deg, rear 40 deg), falling, landing.
   takeoff: { lt: 45, lk: 85, ft: 30, fk: 80, la: -60, le: 40, fa: -50, fe: 40, lean: 3 },
   rising:  { lt: 60, lk: 95, ft: -25, fk: 40, la: 125, le: 35, fa: -40, fe: 30, lean: 1, air: 4 },
@@ -829,10 +838,10 @@ const POSES = {
   landing: { lt: 40, lk: 80, ft: 25, fk: 75, la: 40, le: 30, fa: 40, fe: 30, lean: 3 },
 };
 const RUN_POSES = ['run1', 'run2', 'run3', 'run4', 'run5', 'run6'];
-// Held versions of the run poses, used when the miner stops mid-stride: the same pose with no lift, so the feet touch the floor.
-for (const n of RUN_POSES) POSES[n + 'h'] = Object.assign({}, POSES[n], { air: 0 });
 const RUN_POSE_PX = 8;                    // a new run pose every 8 game pixels of ground covered
 const TAKEOFF_TICKS = 3, LAND_TICKS = 5;  // visual only: the jump itself starts at once
+const TURN_TICKS = 4;                     // ticks spent turning round on the spot (about 0.07 s)
+const LAMP_X = 4, LAMP_SWING = 0.3;       // the lamp light sits 4 px ahead of his middle and swings round when he turns
 const APEX_VY = 1.2;                      // vertical speed below which the jump shows the apex pose
 const mRad = d => d * Math.PI / 180;
 const MC = {
@@ -1128,10 +1137,11 @@ function resetActors() {
   const e = run.entry;
   player = { x: run.start.c * TILE + 2, y: (run.start.r + 1) * TILE - P_H, vx: 0, vy: 0, onGround: true,
              face: e === 'right' || (!e && run.start.c > run.cols / 2) ? -1 : 1, coyote: 0, jumpBuf: 0, dist: 0,
-             takeoff: 0, land: 0, peakY: 0, held: 'stand', safeFall: false };
+             takeoff: 0, land: 0, peakY: 0, held: 'stand', safeFall: false, turn: 0, lampX: 0 };
   if (e === 'top') { player.onGround = false; player.vy = 1; player.safeFall = true; }
   else if (e === 'bottom') { player.onGround = false; player.vy = JUMP_V; player.takeoff = TAKEOFF_TICKS; player.safeFall = true; }
   player.peakY = player.y;
+  player.lampX = player.face * LAMP_X;
   enemies = run.enemyDefs.map(e => e.type === 's'
     ? { type: 's', x: e.c * TILE + 1, y: (e.r + 1) * TILE - 7, w: 10, h: 7, vx: 0.45, anim: 0 }
     : { type: 'b', x: e.c * TILE + 1, y0: e.r * TILE + 3, y: e.r * TILE + 3, w: 10, h: 6, vx: 0.8, t: Math.floor(hash(e.c, e.r) * 100) });
@@ -1208,9 +1218,12 @@ function updatePlayer() {
   if (p.takeoff > 0) p.takeoff--;
   if (p.land > 0) p.land--;
   const dir = ((keys.ArrowRight || keys.KeyD) ? 1 : 0) - ((keys.ArrowLeft || keys.KeyA) ? 1 : 0);
+  // Turning round on the ground takes a moment on the spot, so a quick tap the other way just turns him.
+  if (p.turn > 0) p.turn = dir === p.face ? p.turn - 1 : 0;
+  if (dir && dir !== p.face && p.onGround) p.turn = TURN_TICKS;
   if (dir) p.face = dir;
   // Fixed-arc jump with a little steering in the air. A conveyor underfoot adds its own push.
-  if (p.onGround) p.vx = dir * RUN + conveyorUnder(p);
+  if (p.onGround) p.vx = (p.turn > 0 ? 0 : dir * RUN) + conveyorUnder(p);
   else p.vx += clamp(dir * RUN - p.vx, -AIR_ACC, AIR_ACC);
 
   if (jumpPressed()) p.jumpBuf = 6; else if (p.jumpBuf > 0) p.jumpBuf--;
@@ -1250,21 +1263,26 @@ function updatePlayer() {
     }
     if (land) { p.y = r * TILE - P_H; p.vy = 0; p.onGround = true; }
   } else {
-    const r = Math.floor(p.y / TILE);
-    for (let c = c0; c <= c1; c++) if (isSolidCh(tileAt(c, r))) { p.y = (r + 1) * TILE; p.vy = 0; break; }
+    // Rock and brick stop the miner's head; so does the bar under a conveyor, if he came up from below it.
+    const r = Math.floor(p.y / TILE), fromBelow = prevBottom - P_H >= (r + 1) * TILE - 0.01;
+    for (let c = c0; c <= c1; c++) {
+      const t = tileAt(c, r);
+      if (isSolidCh(t) || (isConveyorCh(t) && fromBelow)) { p.y = (r + 1) * TILE; p.vy = 0; break; }
+    }
   }
   // Animation follows distance covered on the ground, so poses never change faster than the feet move.
   // Being carried by a conveyor without pressing a key doesn't count as running.
   p.moving = p.onGround && p.x !== x0 && dir !== 0;
   if (p.moving) p.dist += Math.abs(p.x - x0);
   if (p.moving) p.held = RUN_POSES[Math.floor(p.dist / RUN_POSE_PX) % RUN_POSES.length];
-  if (!p.onGround) p.held = 'stand';   // after a jump or a fall he lands into the standing pose
+  if (!p.onGround) p.held = 'stand';   // landing from a jump or fall without running, he stands
   if (p.onGround && !wasOnGround) {
-    p.land = LAND_TICKS;
+    p.land = p.moving ? 0 : LAND_TICKS;   // landing on the run carries straight on with the stride
     if (p.y - p.peakY > FALL_MAX && !p.safeFall) { SFX.thud(); die('You fell too far.'); }
     p.safeFall = false;
   }
   if (p.onGround || p.y < p.peakY) p.peakY = p.y;
+  p.lampX += (p.face * LAMP_X - p.lampX) * LAMP_SWING;
 }
 // The push from a conveyor under the miner's feet: -CONVEYOR, 0 or +CONVEYOR.
 function conveyorUnder(p) {
@@ -1577,7 +1595,7 @@ function drawDarkness() {
   dctx.translate(-cam.x, -cam.y);
   const plx = lerpX(player), ply = lerpY(player);
   if (state !== 'dying') {
-    if (!lamp.off) punchLight(plx + (player.face > 0 ? P_W : 0), ply + 3, lightRadius(), 1);
+    if (!lamp.off) punchLight(plx + P_W / 2 + player.lampX, ply + 3, lightRadius(), 1);
   } else {
     punchLight(plx + P_W / 2, ply + P_H / 2, 40 * (stateTimer / 70), 1);
   }
@@ -1630,7 +1648,7 @@ function drawWorldBase() {
         ? (p.takeoff > 0 ? 'takeoff' : p.vy < -APEX_VY ? 'rising' : p.vy <= APEX_VY ? 'apex' : 'falling')
         : p.land > 0 ? 'landing'
         : p.moving ? RUN_POSES[Math.floor(p.dist / RUN_POSE_PX) % RUN_POSES.length]
-        : p.held === 'stand' ? 'stand' : p.held + 'h';   // stopped mid-stride: hold that pose, feet on the floor
+        : p.held;   // stopped mid-stride: hold that pose exactly
       drawMinerArt(pose, camSnapX(lerpX(p) + P_W / 2) * ART, camSnapY(lerpY(p) + P_H) * ART, p.face < 0);
     }
     for (const q of particles) px(ctx, q.col, snap(q.x) * ART, snap(q.y) * ART, 2, 2);

@@ -57,7 +57,7 @@ As the oil burns down, your circle of light shrinks to 40% of its full size at 2
 | Sparkle | 100 points. Collect them all to open the exit. |
 | Oil flask | 50 points and tops up your lamp. |
 | Crumbling ledge | Collapses if you stand on it too long. |
-| Conveyor | A ledge that carries you left or right. Running against it is slower. |
+| Conveyor | A ledge that carries you left or right. Running against it is slower. A solid bar runs underneath, so you can't jump up through one. |
 | Stalactite | Shakes, then falls when you pass beneath it, unless rock or a ledge is in the way. |
 | Spikes, slimes, bats | Lose a life on contact. |
 | Long falls | Falling more than 8 tiles, measured from the top of a jump, costs a life. |
