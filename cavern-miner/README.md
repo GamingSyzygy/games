@@ -57,9 +57,16 @@ As the oil burns down, your circle of light shrinks to 40% of its full size at 2
 | Sparkle | 100 points. Collect them all to open the exit. |
 | Oil flask | 50 points and tops up your lamp. |
 | Crumbling ledge | Collapses if you stand on it too long. |
+| Crumbling block | A full square that holds you up from above and collapses if you stand on it too long. You can walk, run or jump through it. |
 | Conveyor | A ledge that carries you left or right. Running against it is slower. A solid bar runs underneath, so you can't jump up through one. |
+| Open belt | A conveyor with no bar underneath, so you can jump up through it. |
 | Stalactite | Shakes, then falls when you pass beneath it, unless rock or a ledge is in the way. |
-| Spikes, slimes, bats | Lose a life on contact. |
+| Spikes, slimes, bats, mushroom creatures | Lose a life on contact. |
+| Spiders | Drop on a thread to the ledge or floor below, then climb back up. The large spider is two squares wide. |
+| Flying monster | Flies faster than a bat, bobbing into the row above, and comes for you when you are within a square. A falling stalactite kills it. |
+| Flying head | Two squares wide. Moves up to a square up or down to line up with you when you are within 2 squares. A stalactite snaps off a horn and shrinks its reach; lose both and it drops and crumbles. |
+| Demon boss | Paces its ledge and throws a fireball along its row every 3 seconds. Three stalactite hits defeat it, for 1,000 points. |
+| Skeleton lord | Lunges with its scythe when you are close on its level, then rests. Three stalactite hits defeat it, for 1,000 points. |
 | Long falls | Falling more than 8 tiles, measured from the top of a jump, costs a life. |
 
 Lamp oil left when you reach the exit is added to your score. Losing a life resets the cavern, but sparkles you have already collected stay collected. The high score is saved in the browser.
@@ -72,7 +79,7 @@ On the welcome screen, type `cheap` (any capitals) to turn cheat mode on or off.
 - **K** skips the current cavern during play.
 - **L** opens the level editor. Press **H** in the editor for its controls. Use the arrow keys to scroll around caverns larger than the screen.
 
-In the editor, **Z** and **X** pick the left and right conveyors. Place the exit in the outer wall, roof or floor, and place the start where the cavern before it leads in.
+In the editor, **Z** and **X** pick the left and right conveyors, and **V** and **B** the open belts. The palette shows every tile in two rows, and the selected tile's key appears beside its name. Place the exit in the outer wall, roof or floor, and place the start where the cavern before it leads in.
 
 Saved caverns are stored in the browser and replace the built-in ones there. Use **Shift+C** in the editor to copy all caverns as text, which can be shared or built into the game. The password sits in the page's code, so it is a fun lock, not security.
 
