@@ -26,12 +26,13 @@ const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 let SCALE = 1;
 
-// The canvas backing store is an integer multiple of the logical size, so pixel art
-// stays crisp and text renders at full resolution.
+// The canvas backing store is an even multiple of the logical size, so pixel art stays crisp and text
+// renders at full resolution. It rounds to the nearest even multiple of the screen's own pixels, not up,
+// so a 1.5x display isn't drawing twice the pixels it can show.
 function fitCanvas() {
   const css = Math.min(window.innerWidth / VW, window.innerHeight / VH);
   const dpr = window.devicePixelRatio || 1;
-  SCALE = Math.max(2, Math.min(8, 2 * Math.ceil(css * dpr / 2))); // even, so each art pixel is whole screen pixels
+  SCALE = Math.max(2, Math.min(8, 2 * Math.round(css * dpr / 2))); // even, so each art pixel is whole screen pixels
   canvas.width = VW * SCALE;
   canvas.height = VH * SCALE;
   canvas.style.width = Math.floor(VW * css) + 'px';
@@ -54,7 +55,8 @@ function hash(a, b, s = 0) {
 // -  ledge (stand on it, jump up through it)
 // ~  crumbling ledge (collapses if you stand on it)
 // ^  spikes         v  stalactite (falls when you pass beneath)
-// <  conveyor moving left   >  conveyor moving right (stand on them like a ledge; they carry the miner)
+// <  conveyor moving left   >  conveyor moving right (stand on them like a ledge; they carry the miner.
+//    A solid bar runs under the belt, so unlike a ledge you can't jump up through one)
 // *  sparkle        o  oil flask          P  player start
 // E  exit: sits in the cavern's outer wall, roof or floor, and opens once every sparkle is collected
 // s  slime          b  bat
@@ -694,6 +696,13 @@ function drawCrumble(g, x, y, stage) {
 }
 // Conveyor: a belt on rollers, as tall as a ledge, with chevrons that run the way it carries you (dir -1 or 1).
 function drawConveyor(g, x, y, dir, t) {
+  // The solid bar under the belt, on brackets at each roller: you can't jump up through it.
+  for (const bx of [2, AT - 4]) px(g, '#3a3f5c', x + bx, y + 10, 2, 4);
+  px(g, '#1a1030', x, y + 13, AT, 10);
+  px(g, '#6a7090', x, y + 14, AT, 1);
+  px(g, '#3a3f5c', x, y + 15, AT, 6);
+  px(g, '#24283e', x, y + 21, AT, 1);
+  for (let k = 3; k < AT; k += 6) px(g, '#8890b0', x + k, y + 17, 1, 1);
   px(g, '#1a1030', x, y, AT, 10);
   px(g, '#8890b0', x, y, AT, 2);
   px(g, '#4a4f70', x, y + 2, AT, 1);
@@ -813,13 +822,14 @@ const MF = 40, M_GROUND = 38, M_CX = 17.5;
 const M_THIGH = 6, M_SHIN = 6, M_UPPER = 5, M_FORE = 5;
 const POSES = {
   stand:   { lt: 0, lk: 0, ft: 0, fk: 0, la: 4, le: 10, fa: 4, fe: 10, lean: 0 },
-  // Run: airborne stride (1, 4), contact (2, 5), passing (3, 6). Front thigh 36 deg, rear leg 48 deg, arms 72 deg.
-  run1:    { lt: 36, lk: 55, ft: -48, fk: 0, la: -72, le: 15, fa: 72, fe: 15, lean: 2, air: 2 },
+  // Run: full stride (1, 4), contact (2, 5), passing (3, 6). Front thigh 36 deg, rear leg 48 deg, arms 72 deg.
+  // No pose lifts off: the lowest foot is always on the floor, so stopping mid-stride can hold any pose as it is.
+  run1:    { lt: 36, lk: 55, ft: -48, fk: 0, la: -72, le: 15, fa: 72, fe: 15, lean: 2 },
   run2:    { lt: 20, lk: 25, ft: -30, fk: 60, la: -36, le: 40, fa: 36, fe: 40, lean: 2 },
-  run3:    { lt: -6, lk: 20, ft: 28, fk: 80, la: 0, le: 60, fa: 0, fe: 60, lean: 2, air: 1 },
-  run4:    { lt: -48, lk: 0, ft: 36, fk: 55, la: 72, le: 15, fa: -72, fe: 15, lean: 2, air: 2 },
+  run3:    { lt: -6, lk: 20, ft: 28, fk: 80, la: 0, le: 60, fa: 0, fe: 60, lean: 2 },
+  run4:    { lt: -48, lk: 0, ft: 36, fk: 55, la: 72, le: 15, fa: -72, fe: 15, lean: 2 },
   run5:    { lt: -30, lk: 60, ft: 20, fk: 25, la: 36, le: 40, fa: -36, fe: 40, lean: 2 },
-  run6:    { lt: 28, lk: 80, ft: -6, fk: 20, la: 0, le: 60, fa: 0, fe: 60, lean: 2, air: 1 },
+  run6:    { lt: 28, lk: 80, ft: -6, fk: 20, la: 0, le: 60, fa: 0, fe: 60, lean: 2 },
   // Jump: take-off, rising, apex (front leg 30 deg, rear 40 deg), falling, landing.
   takeoff: { lt: 45, lk: 85, ft: 30, fk: 80, la: -60, le: 40, fa: -50, fe: 40, lean: 3 },
   rising:  { lt: 60, lk: 95, ft: -25, fk: 40, la: 125, le: 35, fa: -40, fe: 30, lean: 1, air: 4 },
@@ -828,10 +838,10 @@ const POSES = {
   landing: { lt: 40, lk: 80, ft: 25, fk: 75, la: 40, le: 30, fa: 40, fe: 30, lean: 3 },
 };
 const RUN_POSES = ['run1', 'run2', 'run3', 'run4', 'run5', 'run6'];
-// Held versions of the run poses, used when the miner stops mid-stride: the same pose with no lift, so the feet touch the floor.
-for (const n of RUN_POSES) POSES[n + 'h'] = Object.assign({}, POSES[n], { air: 0 });
 const RUN_POSE_PX = 8;                    // a new run pose every 8 game pixels of ground covered
 const TAKEOFF_TICKS = 3, LAND_TICKS = 5;  // visual only: the jump itself starts at once
+const TURN_TICKS = 4;                     // ticks spent turning round on the spot (about 0.07 s)
+const LAMP_X = 4, LAMP_SWING = 0.3;       // the lamp light sits 4 px ahead of his middle and swings round when he turns
 const APEX_VY = 1.2;                      // vertical speed below which the jump shows the apex pose
 const mRad = d => d * Math.PI / 180;
 const MC = {
@@ -1127,10 +1137,11 @@ function resetActors() {
   const e = run.entry;
   player = { x: run.start.c * TILE + 2, y: (run.start.r + 1) * TILE - P_H, vx: 0, vy: 0, onGround: true,
              face: e === 'right' || (!e && run.start.c > run.cols / 2) ? -1 : 1, coyote: 0, jumpBuf: 0, dist: 0,
-             takeoff: 0, land: 0, peakY: 0, held: 'stand', safeFall: false };
+             takeoff: 0, land: 0, peakY: 0, held: 'stand', safeFall: false, turn: 0, lampX: 0 };
   if (e === 'top') { player.onGround = false; player.vy = 1; player.safeFall = true; }
   else if (e === 'bottom') { player.onGround = false; player.vy = JUMP_V; player.takeoff = TAKEOFF_TICKS; player.safeFall = true; }
   player.peakY = player.y;
+  player.lampX = player.face * LAMP_X;
   enemies = run.enemyDefs.map(e => e.type === 's'
     ? { type: 's', x: e.c * TILE + 1, y: (e.r + 1) * TILE - 7, w: 10, h: 7, vx: 0.45, anim: 0 }
     : { type: 'b', x: e.c * TILE + 1, y0: e.r * TILE + 3, y: e.r * TILE + 3, w: 10, h: 6, vx: 0.8, t: Math.floor(hash(e.c, e.r) * 100) });
@@ -1207,9 +1218,12 @@ function updatePlayer() {
   if (p.takeoff > 0) p.takeoff--;
   if (p.land > 0) p.land--;
   const dir = ((keys.ArrowRight || keys.KeyD) ? 1 : 0) - ((keys.ArrowLeft || keys.KeyA) ? 1 : 0);
+  // Turning round on the ground takes a moment on the spot, so a quick tap the other way just turns him.
+  if (p.turn > 0) p.turn = dir === p.face ? p.turn - 1 : 0;
+  if (dir && dir !== p.face && p.onGround) p.turn = TURN_TICKS;
   if (dir) p.face = dir;
   // Fixed-arc jump with a little steering in the air. A conveyor underfoot adds its own push.
-  if (p.onGround) p.vx = dir * RUN + conveyorUnder(p);
+  if (p.onGround) p.vx = (p.turn > 0 ? 0 : dir * RUN) + conveyorUnder(p);
   else p.vx += clamp(dir * RUN - p.vx, -AIR_ACC, AIR_ACC);
 
   if (jumpPressed()) p.jumpBuf = 6; else if (p.jumpBuf > 0) p.jumpBuf--;
@@ -1249,21 +1263,26 @@ function updatePlayer() {
     }
     if (land) { p.y = r * TILE - P_H; p.vy = 0; p.onGround = true; }
   } else {
-    const r = Math.floor(p.y / TILE);
-    for (let c = c0; c <= c1; c++) if (isSolidCh(tileAt(c, r))) { p.y = (r + 1) * TILE; p.vy = 0; break; }
+    // Rock and brick stop the miner's head; so does the bar under a conveyor, if he came up from below it.
+    const r = Math.floor(p.y / TILE), fromBelow = prevBottom - P_H >= (r + 1) * TILE - 0.01;
+    for (let c = c0; c <= c1; c++) {
+      const t = tileAt(c, r);
+      if (isSolidCh(t) || (isConveyorCh(t) && fromBelow)) { p.y = (r + 1) * TILE; p.vy = 0; break; }
+    }
   }
   // Animation follows distance covered on the ground, so poses never change faster than the feet move.
   // Being carried by a conveyor without pressing a key doesn't count as running.
   p.moving = p.onGround && p.x !== x0 && dir !== 0;
   if (p.moving) p.dist += Math.abs(p.x - x0);
   if (p.moving) p.held = RUN_POSES[Math.floor(p.dist / RUN_POSE_PX) % RUN_POSES.length];
-  if (!p.onGround) p.held = 'stand';   // after a jump or a fall he lands into the standing pose
+  if (!p.onGround) p.held = 'stand';   // landing from a jump or fall without running, he stands
   if (p.onGround && !wasOnGround) {
-    p.land = LAND_TICKS;
+    p.land = p.moving ? 0 : LAND_TICKS;   // landing on the run carries straight on with the stride
     if (p.y - p.peakY > FALL_MAX && !p.safeFall) { SFX.thud(); die('You fell too far.'); }
     p.safeFall = false;
   }
   if (p.onGround || p.y < p.peakY) p.peakY = p.y;
+  p.lampX += (p.face * LAMP_X - p.lampX) * LAMP_SWING;
 }
 // The push from a conveyor under the miner's feet: -CONVEYOR, 0 or +CONVEYOR.
 function conveyorUnder(p) {
@@ -1317,11 +1336,19 @@ function updateEnemies() {
   }
   enemies = enemies.filter(e => e.y < run.rows * TILE + 20);
 }
+// A stalactite only drops when nothing is in the way: no rock, brick, ledge or conveyor between it and the
+// miner's head, either in the column it falls down or in the column the miner is standing in.
+function stalClearTo(s, pcx) {
+  const r0 = Math.floor(s.y / TILE) + 1, r1 = Math.floor(player.y / TILE);
+  const cols = [Math.floor((s.x + 4) / TILE), Math.floor(pcx / TILE)];
+  for (const c of cols) for (let r = r0; r <= r1; r++) if (isSupportCh(tileAt(c, r))) return false;
+  return true;
+}
 function updateStalactites() {
   const pcx = player.x + P_W / 2;
   for (const s of stals) {
     if (s.state === 'hang') {
-      if (Math.abs(pcx - (s.x + 4)) < 12 && player.y > s.y) { s.state = 'shake'; s.timer = 20; SFX.shake(); }
+      if (Math.abs(pcx - (s.x + 4)) < 12 && player.y > s.y && stalClearTo(s, pcx)) { s.state = 'shake'; s.timer = 20; SFX.shake(); }
     } else if (s.state === 'shake') {
       if (--s.timer <= 0) s.state = 'fall';
     } else if (s.state === 'fall') {
@@ -1337,21 +1364,30 @@ function updateStalactites() {
     }
   }
 }
+// The miner's hazard box: one fixed box for every pose, set inside his body and helmet so a hit only counts
+// once the pixels touch. The sprite sits slightly towards the way he faces, so the box moves with it.
+const HIT_W = 4, HIT_TOP = 3, HIT_H = 13, HIT_LEAN = 0.75;
+function minerHitBox(p) {
+  return { x: p.x + P_W / 2 - HIT_W / 2 + HIT_LEAN * p.face, y: p.y + HIT_TOP, w: HIT_W, h: HIT_H };
+}
 function checkHazards() {
   const p = player;
   if (p.y > run.rows * TILE) { die('You fell into the dark.'); return; }
-  const hit = { x: p.x + 1, y: p.y + 2, w: P_W - 2, h: P_H - 3 };
-  // Spikes
-  const c0 = Math.floor(hit.x / TILE), c1 = Math.floor((hit.x + hit.w) / TILE);
+  const hit = minerHitBox(p);
+  // Spikes: the shards stop 1 pixel short of each side of the tile, and they get you once your feet are among them.
+  const c0 = Math.floor(hit.x / TILE), c1 = Math.floor((hit.x + hit.w - 0.001) / TILE);
   const r0 = Math.floor(hit.y / TILE), r1 = Math.floor((p.y + P_H - 1) / TILE);
   for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) {
-    if (tileAt(c, r) === '^' && p.y + P_H > r * TILE + 6) { die('Spiked!'); return; }
+    if (tileAt(c, r) === '^' && p.y + P_H > r * TILE + 6 && overlap(hit, { x: c * TILE + 1, y: r * TILE, w: TILE - 2, h: TILE })) { die('Spiked!'); return; }
   }
   for (const e of enemies) {
     if (overlap(hit, { x: e.x + 1, y: e.y + 1, w: e.w - 2, h: e.h - 1 })) { die(e.type === 's' ? 'Slimed!' : 'Bitten by a bat!'); return; }
   }
   for (const s of stals) {
-    if (s.state !== 'gone' && overlap(hit, { x: s.x + 1, y: s.y, w: 6, h: s.h - 2 })) { die('Hit by a stalactite!'); return; }
+    // Two boxes that follow the taper: the broad root, then the narrow point.
+    if (s.state !== 'gone' && (overlap(hit, { x: s.x + 1, y: s.y, w: 6, h: 6 }) || overlap(hit, { x: s.x + 3, y: s.y + 6, w: 2, h: 5 }))) {
+      die('Hit by a stalactite!'); return;
+    }
   }
 }
 function checkPickups() {
@@ -1366,7 +1402,7 @@ function checkPickups() {
   }
   for (const o of run.oils) {
     if (!o.taken && overlap(p, { x: o.c * TILE + 2, y: o.r * TILE + 2, w: 8, h: 10 })) {
-      o.taken = true; addScore(50); oil = Math.min(100, oil + 40);
+      o.taken = true; addScore(50); oil = Math.min(100, oil + 100 * FLASK_SECONDS / run.def.oil);
       burst(o.c * TILE + 6, o.r * TILE + 6, 10, ['#ff9a3a', '#ffd090'], 1.2);
       SFX.oil();
     }
@@ -1386,6 +1422,7 @@ function update() {
   if (cheatFlash > 0) cheatFlash--;
   if (livesFlash > 0) livesFlash--;
   if (pressed.KeyM && state !== 'editor') { muted = !muted; store(MUTE_KEY, muted ? '1' : '0'); }
+  if (pressed.KeyF && state !== 'editor') showPerf = !showPerf;
   switch (state) {
     case 'title': updateTitle(); break;
     case 'play': updatePlay(); break;
@@ -1456,6 +1493,7 @@ function updateEnd() {
 // ---------- Rendering: play ----------
 // The lamp light shrinks steadily from full size to LAMP_MIN of it as the oil falls to LOW_OIL, then holds.
 const LAMP_FULL = 110, LAMP_MIN = 0.4, LOW_OIL = 20;
+const FLASK_SECONDS = 10;   // an oil flask adds this much lamp time in any cavern, up to a full lamp
 function lightRadius() {
   const k = oil >= LOW_OIL ? LAMP_MIN + (1 - LAMP_MIN) * (oil - LOW_OIL) / (100 - LOW_OIL) : LAMP_MIN;
   return LAMP_FULL * k + Math.sin(frame * 0.3) * 1.2;
@@ -1471,11 +1509,26 @@ function updateLamp() {
     SFX.sputter();
   }
 }
-// The darkness layer is drawn at full screen resolution so the edge of the lamp light moves smoothly.
+// The darkness is a soft gradient, so it is drawn at a low resolution and smoothed up to the screen.
+// That is the biggest saving per frame: at full resolution it filled several million pixels three times over.
+const DARK_SCALE = 2;
 const dark = document.createElement('canvas');
 const dctx = dark.getContext('2d');
 function sizeDark() {
-  if (dark.width !== VW * SCALE || dark.height !== PLAY_H * SCALE) { dark.width = VW * SCALE; dark.height = PLAY_H * SCALE; }
+  if (dark.width !== VW * DARK_SCALE || dark.height !== PLAY_H * DARK_SCALE) { dark.width = VW * DARK_SCALE; dark.height = PLAY_H * DARK_SCALE; }
+}
+// One pre-drawn pool of light, stretched and faded for every light, instead of building gradients each frame.
+const LIGHT_R = 128;
+const lightImg = document.createElement('canvas');
+lightImg.width = lightImg.height = LIGHT_R * 2;
+{
+  const g = lightImg.getContext('2d');
+  const gr = g.createRadialGradient(LIGHT_R, LIGHT_R, LIGHT_R * 0.15, LIGHT_R, LIGHT_R, LIGHT_R);
+  gr.addColorStop(0, 'rgba(0,0,0,1)');
+  gr.addColorStop(0.6, 'rgba(0,0,0,0.8)');
+  gr.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = gr;
+  g.fillRect(0, 0, LIGHT_R * 2, LIGHT_R * 2);
 }
 // Smooth movement: positions are blended between game ticks and drawn at screen-pixel precision,
 // instead of jumping between the coarse game pixels.
@@ -1491,18 +1544,16 @@ function savePrevPositions() {
   for (const s of stals) { s.px = s.x; s.py = s.y; }
 }
 function punchLight(x, y, r, strength) {
-  const g = dctx.createRadialGradient(x, y, r * 0.15, x, y, r);
-  g.addColorStop(0, `rgba(0,0,0,${strength})`);
-  g.addColorStop(0.6, `rgba(0,0,0,${strength * 0.8})`);
-  g.addColorStop(1, 'rgba(0,0,0,0)');
-  dctx.fillStyle = g;
-  dctx.fillRect(x - r, y - r, r * 2, r * 2);
+  if (r <= 0) return;
+  dctx.globalAlpha = strength;
+  dctx.drawImage(lightImg, x - r, y - r, r * 2, r * 2);
+  dctx.globalAlpha = 1;
 }
 // The camera follows the miner and stops at the cavern's edges. With a screen-sized cavern it stays at 0,0.
 // The miner moves freely inside a box around the middle of the screen; once he pushes past its edge
 // the view eases after him. It runs on game ticks (wx, wy) and is blended between ticks when drawn (x, y).
 const CAM_BOX_X = 40, CAM_BOX_Y = 24, CAM_EASE_X = 0.12, CAM_EASE_Y = 0.18;
-const cam = { x: 0, y: 0, wx: 0, wy: 0, pwx: 0, pwy: 0, tx: 0, ty: 0 };
+const cam = { x: 0, y: 0, rx: 0, ry: 0, wx: 0, wy: 0, pwx: 0, pwy: 0, tx: 0, ty: 0 };
 function stepCamera(instant) {
   const maxX = Math.max(0, run.cols * TILE - VW), maxY = Math.max(0, run.rows * TILE - PLAY_H);
   const cx = player.x + P_W / 2 - VW / 2, cy = player.y + P_H / 2 - PLAY_H / 2;
@@ -1514,9 +1565,16 @@ function stepCamera(instant) {
   cam.wy += (cam.ty - cam.wy) * CAM_EASE_Y;
 }
 function updateCamera() {
-  cam.x = snap(cam.pwx + (cam.wx - cam.pwx) * renderAlpha);
-  cam.y = snap(cam.pwy + (cam.wy - cam.pwy) * renderAlpha);
+  cam.rx = cam.pwx + (cam.wx - cam.pwx) * renderAlpha;
+  cam.ry = cam.pwy + (cam.wy - cam.pwy) * renderAlpha;
+  cam.x = snap(cam.rx);
+  cam.y = snap(cam.ry);
 }
+// Moving things are rounded to screen pixels relative to the camera, not on their own. Rounding both
+// separately let the miner and enemies flicker a pixel against the cavern while the view scrolled.
+// Anything sitting on a whole pixel, like feet on a floor, still lands exactly where it did.
+const camSnapX = v => cam.x + snap(v - cam.rx);
+const camSnapY = v => cam.y + snap(v - cam.ry);
 function worldView(fn) {
   ctx.save();
   ctx.beginPath(); ctx.rect(0, 0, VW, PLAY_H); ctx.clip();
@@ -1526,7 +1584,8 @@ function worldView(fn) {
 }
 function drawDarkness() {
   sizeDark();
-  dctx.setTransform(SCALE, 0, 0, SCALE, 0, 0);
+  dctx.setTransform(DARK_SCALE, 0, 0, DARK_SCALE, 0, 0);
+  dctx.imageSmoothingEnabled = true;
   dctx.globalCompositeOperation = 'source-over';
   dctx.clearRect(0, 0, VW, PLAY_H);
   dctx.fillStyle = 'rgba(2,2,12,0.9)';
@@ -1536,7 +1595,7 @@ function drawDarkness() {
   dctx.translate(-cam.x, -cam.y);
   const plx = lerpX(player), ply = lerpY(player);
   if (state !== 'dying') {
-    if (!lamp.off) punchLight(plx + (player.face > 0 ? P_W : 0), ply + 3, lightRadius(), 1);
+    if (!lamp.off) punchLight(plx + P_W / 2 + player.lampX, ply + 3, lightRadius(), 1);
   } else {
     punchLight(plx + P_W / 2, ply + P_H / 2, 40 * (stateTimer / 70), 1);
   }
@@ -1544,7 +1603,9 @@ function drawDarkness() {
   if (run.open) punchLight(run.exit.c * TILE + 6, run.exit.r * TILE + 6, 30, 0.8);
   dctx.restore();
   dctx.globalCompositeOperation = 'source-over';
+  ctx.imageSmoothingEnabled = true;
   ctx.drawImage(dark, 0, 0, VW, PLAY_H);
+  ctx.imageSmoothingEnabled = false;
 }
 function drawWorld() {
   ctx.imageSmoothingEnabled = false;
@@ -1554,9 +1615,14 @@ function drawWorld() {
   worldView(drawWorldGlow);
 }
 function drawWorldBase() {
-  ctx.drawImage(run.staticCanvas, 0, 0, run.cols * TILE, run.rows * TILE);
+  // Only the part of the cavern on screen is drawn, cut on whole pixels so it lines up exactly as before.
+  const x0 = Math.max(0, Math.floor(cam.x)), y0 = Math.max(0, Math.floor(cam.y));
+  const x1 = Math.min(run.cols * TILE, Math.ceil(cam.x + VW)), y1 = Math.min(run.rows * TILE, Math.ceil(cam.y + PLAY_H));
+  ctx.drawImage(run.staticCanvas, x0 * ART, y0 * ART, (x1 - x0) * ART, (y1 - y0) * ART, x0, y0, x1 - x0, y1 - y0);
+  const c0 = Math.floor(x0 / TILE), c1 = Math.min(run.cols, Math.ceil(x1 / TILE));
+  const r0 = Math.floor(y0 / TILE), r1 = Math.min(run.rows, Math.ceil(y1 / TILE));
   artView(() => {
-    for (let r = 0; r < run.rows; r++) for (let c = 0; c < run.cols; c++) {
+    for (let r = r0; r < r1; r++) for (let c = c0; c < c1; c++) {
       const ch = run.grid[r][c];
       if (isConveyorCh(ch)) { drawConveyor(ctx, c * AT, r * AT, ch === '>' ? 1 : -1, frame); continue; }
       if (ch !== '~') continue;
@@ -1568,11 +1634,11 @@ function drawWorldBase() {
     for (const s of stals) {
       if (s.state === 'gone') continue;
       const j = s.state === 'shake' ? (frame % 4 < 2 ? -1 : 1) : 0;
-      drawStalactite(ctx, snap(s.x + j) * ART, snap(lerpY(s)) * ART);
+      drawStalactite(ctx, camSnapX(s.x + j) * ART, camSnapY(lerpY(s)) * ART);
     }
     drawExit(ctx, run.exit.c * AT, run.exit.r * AT, run.open, frame, run.exit.kind);
     for (const e of enemies) {
-      const ex = snap(lerpX(e)) * ART, ey = snap(lerpY(e)) * ART;
+      const ex = camSnapX(lerpX(e)) * ART, ey = camSnapY(lerpY(e)) * ART;
       if (e.type === 's') drawSpriteArt(Math.floor(e.anim / 16) % 2 ? SLIME_B : SLIME_A, SCOL, ex, ey, e.vx < 0);
       else drawSpriteArt(Math.floor(e.t / 8) % 2 ? BAT_B : BAT_A, BCOL, ex, ey, false);
     }
@@ -1582,8 +1648,8 @@ function drawWorldBase() {
         ? (p.takeoff > 0 ? 'takeoff' : p.vy < -APEX_VY ? 'rising' : p.vy <= APEX_VY ? 'apex' : 'falling')
         : p.land > 0 ? 'landing'
         : p.moving ? RUN_POSES[Math.floor(p.dist / RUN_POSE_PX) % RUN_POSES.length]
-        : p.held === 'stand' ? 'stand' : p.held + 'h';   // stopped mid-stride: hold that pose, feet on the floor
-      drawMinerArt(pose, snap(lerpX(p) + P_W / 2) * ART, snap(lerpY(p) + P_H) * ART, p.face < 0);
+        : p.held;   // stopped mid-stride: hold that pose exactly
+      drawMinerArt(pose, camSnapX(lerpX(p) + P_W / 2) * ART, camSnapY(lerpY(p) + P_H) * ART, p.face < 0);
     }
     for (const q of particles) px(ctx, q.col, snap(q.x) * ART, snap(q.y) * ART, 2, 2);
   });
@@ -1595,7 +1661,7 @@ function drawWorldGlow() {
     if (run.open) drawExit(ctx, run.exit.c * AT, run.exit.r * AT, true, frame, run.exit.kind);
     for (const o of run.oils) if (!o.taken && Math.floor((frame + o.c * 13) / 20) % 3 === 0) px(ctx, '#ffe0b0', (o.c * TILE + 2) * ART + 3, (o.r * TILE + 2) * ART + 10, 1, 3);
     for (const e of enemies) {
-      const ex = snap(lerpX(e)) * ART, ey = snap(lerpY(e)) * ART;
+      const ex = camSnapX(lerpX(e)) * ART, ey = camSnapY(lerpY(e)) * ART;
       if (e.type === 'b') px(ctx, '#ff4a5a', ex + 8, ey + 4, 4, 2);
       else {
         ctx.globalAlpha = 0.5;
@@ -2037,13 +2103,37 @@ function draw() {
 }
 const STEP = 1 / 60;
 let last = performance.now(), acc = 0;
+// Frame-time readout (F key): frames a second, the gap between frames, how long drawing takes,
+// and how many frames had to run two or more game ticks to catch up. Figures cover the last second.
+let showPerf = false;
+const perf = { n: 0, gapMax: 0, drawSum: 0, drawMax: 0, catchUp: 0, t0: 0, line: '' };
+function notePerf(now, gap, drawMs, ticks) {
+  perf.n++; perf.gapMax = Math.max(perf.gapMax, gap);
+  perf.drawSum += drawMs; perf.drawMax = Math.max(perf.drawMax, drawMs);
+  if (ticks > 1) perf.catchUp++;
+  if (now - perf.t0 >= 1000) {
+    const secs = (now - perf.t0) / 1000;
+    perf.line = `FPS ${Math.round(perf.n / secs)}  GAP MAX ${perf.gapMax.toFixed(0)}MS  DRAW ${(perf.drawSum / perf.n).toFixed(1)}/${perf.drawMax.toFixed(1)}MS  CATCH-UP ${perf.catchUp}  SCALE ${SCALE}`;
+    Object.assign(perf, { n: 0, gapMax: 0, drawSum: 0, drawMax: 0, catchUp: 0, t0: now });
+  }
+}
+function drawPerf() {
+  if (!showPerf || !perf.line) return;
+  px(ctx, 'rgba(0,0,0,0.7)', 0, 0, VW, 10);
+  text(perf.line, 3, 1, { size: 7, color: '#8ff0ff', bold: false });
+}
 function loop(now) {
   requestAnimationFrame(loop); // schedule first so an error can't freeze the game
-  acc += Math.min(0.1, (now - last) / 1000);
+  const gap = now - last;
+  acc += Math.min(0.1, gap / 1000);
   last = now;
-  while (acc >= STEP) { savePrevPositions(); update(); pressed = {}; acc -= STEP; }
+  let ticks = 0;
+  while (acc >= STEP) { savePrevPositions(); update(); pressed = {}; acc -= STEP; ticks++; }
   renderAlpha = acc / STEP;
+  const t = performance.now();
   draw();
+  drawPerf();
+  notePerf(now, gap, performance.now() - t, ticks);
 }
 requestAnimationFrame(loop);
 </script>
