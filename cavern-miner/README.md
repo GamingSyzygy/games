@@ -27,7 +27,7 @@ Entering one of the larger caverns, you can arrive at any height on that side. A
 
 ## Time
 
-Each cavern's lamp oil is 20 seconds a screen, times the larger of its width or height in screens: 20 seconds for one screen, 40 for 2 × 2 and 60 for 3 × 3. An oil flask refills 40% of the lamp. Every built-in cavern can be finished with at least 10 seconds of lamp to spare on its fastest route.
+Each cavern's lamp oil is 30 seconds a screen, times the larger of its width or height in screens: 30 seconds for one screen, 60 for 2 × 2 and 90 for 3 × 3. An oil flask refills 40% of the lamp. Every built-in cavern can be finished with at least 10 seconds of lamp to spare on its fastest route.
 
 ## Extra lives
 
