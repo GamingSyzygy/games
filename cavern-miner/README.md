@@ -66,11 +66,11 @@ As the oil burns down, your circle of light shrinks to 40% of its full size at 2
 | Spiders | Drop on a thread to the ledge or floor below, then climb back up. The large spider is two squares wide. |
 | Flying monster | Flies faster than a bat, bobbing into the row above, and comes for you when you are within a square. A falling stalactite kills it. |
 | Flying head | Two squares wide. Moves up to a square up or down to line up with you when you are within 2 squares. A stalactite snaps off a horn and shrinks its reach; lose both and it drops and crumbles. |
-| Demon boss | Paces its ledge and throws a fireball along its row every 3 seconds. Three stalactite hits defeat it, for 1,000 points. |
-| Skeleton lord | Lunges with its scythe when you are close on its level, then rests. Three stalactite hits defeat it, for 1,000 points. |
+| Demon boss | Paces its ledge and throws a fireball along its row every 3 seconds. Three stalactite hits defeat it, for 5,000 points. |
+| Skeleton lord | Lunges with its scythe when you are close on its level, then rests. Three stalactite hits defeat it, for 5,000 points. |
 | Long falls | Falling more than 8 tiles, measured from the top of a jump, costs a life. |
 
-Lamp oil left when you reach the exit is added to your score. Losing a life resets the cavern, but sparkles you have already collected stay collected. The high score is saved in the browser.
+Lamp oil left when you reach the exit is added to your score, at 20 points for each percent left (up to 2,000 for a full lamp). Losing a life resets the cavern, but sparkles you have already collected stay collected. The high score is saved in the browser.
 
 ## Cheat mode and level editor
 
